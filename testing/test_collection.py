@@ -6,9 +6,10 @@ import textwrap
 import py
 
 import pytest
+from _pytest.config import ExitCode
 from _pytest.main import _in_venv
-from _pytest.main import ExitCode
 from _pytest.main import Session
+from _pytest.pytester import Testdir
 
 
 class TestCollector:
@@ -18,7 +19,7 @@ class TestCollector:
         assert not issubclass(Collector, Item)
         assert not issubclass(Item, Collector)
 
-    def test_check_equality(self, testdir):
+    def test_check_equality(self, testdir: Testdir) -> None:
         modcol = testdir.getmodulecol(
             """
             def test_pass(): pass
@@ -40,17 +41,20 @@ class TestCollector:
         assert fn1 != fn3
 
         for fn in fn1, fn2, fn3:
-            assert fn != 3
+            assert isinstance(fn, pytest.Function)
+            assert fn != 3  # type: ignore[comparison-overlap]  # noqa: F821
             assert fn != modcol
-            assert fn != [1, 2, 3]
-            assert [1, 2, 3] != fn
+            assert fn != [1, 2, 3]  # type: ignore[comparison-overlap]  # noqa: F821
+            assert [1, 2, 3] != fn  # type: ignore[comparison-overlap]  # noqa: F821
             assert modcol != fn
+
+        assert testdir.collect_by_name(modcol, "doesnotexist") is None
 
     def test_getparent(self, testdir):
         modcol = testdir.getmodulecol(
             """
-            class TestClass(object):
-                 def test_foo():
+            class TestClass:
+                 def test_foo(self):
                      pass
         """
         )
@@ -75,7 +79,7 @@ class TestCollector:
                 pass
             def pytest_collect_file(path, parent):
                 if path.ext == ".xxx":
-                    return CustomFile(path, parent=parent)
+                    return CustomFile.from_parent(fspath=path, parent=parent)
         """
         )
         node = testdir.getpathnode(hello)
@@ -139,7 +143,7 @@ class TestCollectFS:
 
         # by default, ignore tests inside a virtualenv
         result = testdir.runpytest()
-        assert "test_invenv" not in result.stdout.str()
+        result.stdout.no_fnmatch_line("*test_invenv*")
         # allow test collection if user insists
         result = testdir.runpytest("--collect-in-virtualenv")
         assert "test_invenv" in result.stdout.str()
@@ -165,7 +169,7 @@ class TestCollectFS:
         testfile = testdir.tmpdir.ensure(".virtual", "test_invenv.py")
         testfile.write("def test_hello(): pass")
         result = testdir.runpytest("--collect-in-virtualenv")
-        assert "test_invenv" not in result.stdout.str()
+        result.stdout.no_fnmatch_line("*test_invenv*")
         # ...unless the virtualenv is explicitly given on the CLI
         result = testdir.runpytest("--collect-in-virtualenv", ".virtual")
         assert "test_invenv" in result.stdout.str()
@@ -243,7 +247,7 @@ class TestCollectPluginHookRelay:
         wascalled = []
 
         class Plugin:
-            def pytest_collect_file(self, path, parent):
+            def pytest_collect_file(self, path):
                 if not path.basename.startswith("."):
                     # Ignore hidden files, e.g. .testmondata.
                     wascalled.append(path)
@@ -253,11 +257,12 @@ class TestCollectPluginHookRelay:
         assert len(wascalled) == 1
         assert wascalled[0].ext == ".abc"
 
+    @pytest.mark.filterwarnings("ignore:.*pytest_collect_directory.*")
     def test_pytest_collect_directory(self, testdir):
         wascalled = []
 
         class Plugin:
-            def pytest_collect_directory(self, path, parent):
+            def pytest_collect_directory(self, path):
                 wascalled.append(path.basename)
 
         testdir.mkdir("hello")
@@ -364,7 +369,7 @@ class TestCustomConftests:
         testdir.makepyfile(test_world="def test_hello(): pass")
         result = testdir.runpytest()
         assert result.ret == ExitCode.NO_TESTS_COLLECTED
-        assert "passed" not in result.stdout.str()
+        result.stdout.no_fnmatch_line("*passed*")
         result = testdir.runpytest("--XX")
         assert result.ret == 0
         assert "passed" in result.stdout.str()
@@ -402,7 +407,7 @@ class TestCustomConftests:
         )
         testdir.mkdir("sub")
         testdir.makepyfile("def test_x(): pass")
-        result = testdir.runpytest("--collect-only")
+        result = testdir.runpytest("--co")
         result.stdout.fnmatch_lines(["*MyModule*", "*test_x*"])
 
     def test_pytest_collect_file_from_sister_dir(self, testdir):
@@ -433,12 +438,12 @@ class TestCustomConftests:
         p = testdir.makepyfile("def test_x(): pass")
         p.copy(sub1.join(p.basename))
         p.copy(sub2.join(p.basename))
-        result = testdir.runpytest("--collect-only")
+        result = testdir.runpytest("--co")
         result.stdout.fnmatch_lines(["*MyModule1*", "*MyModule2*", "*test_x*"])
 
 
 class TestSession:
-    def test_parsearg(self, testdir):
+    def test_parsearg(self, testdir) -> None:
         p = testdir.makepyfile("def test_func(): pass")
         subdir = testdir.mkdir("sub")
         subdir.ensure("__init__.py")
@@ -446,16 +451,16 @@ class TestSession:
         p.move(target)
         subdir.chdir()
         config = testdir.parseconfig(p.basename)
-        rcol = Session(config=config)
+        rcol = Session.from_config(config)
         assert rcol.fspath == subdir
-        parts = rcol._parsearg(p.basename)
+        fspath, parts = rcol._parsearg(p.basename)
 
-        assert parts[0] == target
+        assert fspath == target
+        assert len(parts) == 0
+        fspath, parts = rcol._parsearg(p.basename + "::test_func")
+        assert fspath == target
+        assert parts[0] == "test_func"
         assert len(parts) == 1
-        parts = rcol._parsearg(p.basename + "::test_func")
-        assert parts[0] == target
-        assert parts[1] == "test_func"
-        assert len(parts) == 2
 
     def test_collect_topdir(self, testdir):
         p = testdir.makepyfile("def test_func(): pass")
@@ -463,7 +468,7 @@ class TestSession:
         # XXX migrate to collectonly? (see below)
         config = testdir.parseconfig(id)
         topdir = testdir.tmpdir
-        rcol = Session(config)
+        rcol = Session.from_config(config)
         assert topdir == rcol.fspath
         # rootid = rcol.nodeid
         # root2 = rcol.perform_collect([rcol.nodeid], genitems=False)[0]
@@ -486,7 +491,7 @@ class TestSession:
         p = testdir.makepyfile("def test_func(): pass")
         id = "::".join([p.basename, "test_func"])
         items, hookrec = testdir.inline_genitems(id)
-        item, = items
+        (item,) = items
         assert item.name == "test_func"
         newid = item.nodeid
         assert newid == id
@@ -605,9 +610,9 @@ class TestSession:
         testdir.makepyfile("def test_func(): pass")
         items, hookrec = testdir.inline_genitems()
         assert len(items) == 1
-        item, = items
+        (item,) = items
         items2, hookrec = testdir.inline_genitems(item.nodeid)
-        item2, = items2
+        (item2,) = items2
         assert item2.name == item.name
         assert item2.fspath == item.fspath
 
@@ -622,7 +627,7 @@ class TestSession:
         arg = p.basename + "::TestClass::test_method"
         items, hookrec = testdir.inline_genitems(arg)
         assert len(items) == 1
-        item, = items
+        (item,) = items
         assert item.nodeid.endswith("TestClass::test_method")
         # ensure we are reporting the collection of the single test item (#2464)
         assert [x.name for x in self.get_reported_items(hookrec)] == ["test_method"]
@@ -685,6 +690,8 @@ class Test_genitems:
     def test_example_items1(self, testdir):
         p = testdir.makepyfile(
             """
+            import pytest
+
             def testone():
                 pass
 
@@ -693,19 +700,24 @@ class Test_genitems:
                     pass
 
             class TestY(TestX):
-                pass
+                @pytest.mark.parametrize("arg0", [".["])
+                def testmethod_two(self, arg0):
+                    pass
         """
         )
         items, reprec = testdir.inline_genitems(p)
-        assert len(items) == 3
+        assert len(items) == 4
         assert items[0].name == "testone"
         assert items[1].name == "testmethod_one"
         assert items[2].name == "testmethod_one"
+        assert items[3].name == "testmethod_two[.[]"
 
         # let's also test getmodpath here
         assert items[0].getmodpath() == "testone"
         assert items[1].getmodpath() == "TestX.testmethod_one"
         assert items[2].getmodpath() == "TestY.testmethod_one"
+        # PR #6202: Fix incorrect result of getmodpath method. (Resolves issue #6189)
+        assert items[3].getmodpath() == "TestY.testmethod_two[.[]"
 
         s = items[0].getmodpath(stopatmodule=False)
         assert s.endswith("test_example_items1.testone")
@@ -802,6 +814,43 @@ class TestNodekeywords:
         reprec = testdir.inline_run("-k repr")
         reprec.assertoutcome(passed=1, failed=0)
 
+    def test_keyword_matching_is_case_insensitive_by_default(self, testdir):
+        """Check that selection via -k EXPRESSION is case-insensitive.
+
+        Since markers are also added to the node keywords, they too can
+        be matched without having to think about case sensitivity.
+
+        """
+        testdir.makepyfile(
+            """
+            import pytest
+
+            def test_sPeCiFiCToPiC_1():
+                assert True
+
+            class TestSpecificTopic_2:
+                def test(self):
+                    assert True
+
+            @pytest.mark.sPeCiFiCToPic_3
+            def test():
+                assert True
+
+            @pytest.mark.sPeCiFiCToPic_4
+            class Test:
+                def test(self):
+                    assert True
+
+            def test_failing_5():
+                assert False, "This should not match"
+
+        """
+        )
+        num_matching_tests = 4
+        for expression in ("specifictopic", "SPECIFICTOPIC", "SpecificTopic"):
+            reprec = testdir.inline_run("-k " + expression)
+            reprec.assertoutcome(passed=num_matching_tests, failed=0)
+
 
 COLLECTION_ERROR_PY_FILES = dict(
     test_01_failure="""
@@ -852,12 +901,16 @@ def test_exit_on_collection_with_maxfail_smaller_than_n_errors(testdir):
 
     res = testdir.runpytest("--maxfail=1")
     assert res.ret == 1
-
     res.stdout.fnmatch_lines(
-        ["*ERROR collecting test_02_import_error.py*", "*No module named *asdfa*"]
+        [
+            "collected 1 item / 1 error",
+            "*ERROR collecting test_02_import_error.py*",
+            "*No module named *asdfa*",
+            "*! stopping after 1 failures !*",
+            "*= 1 error in *",
+        ]
     )
-
-    assert "test_03" not in res.stdout.str()
+    res.stdout.no_fnmatch_line("*test_03*")
 
 
 def test_exit_on_collection_with_maxfail_bigger_than_n_errors(testdir):
@@ -869,7 +922,6 @@ def test_exit_on_collection_with_maxfail_bigger_than_n_errors(testdir):
 
     res = testdir.runpytest("--maxfail=4")
     assert res.ret == 2
-
     res.stdout.fnmatch_lines(
         [
             "collected 2 items / 2 errors",
@@ -877,6 +929,8 @@ def test_exit_on_collection_with_maxfail_bigger_than_n_errors(testdir):
             "*No module named *asdfa*",
             "*ERROR collecting test_03_import_error.py*",
             "*No module named *asdfa*",
+            "*! Interrupted: 2 errors during collection !*",
+            "*= 2 errors in *",
         ]
     )
 
@@ -892,7 +946,7 @@ def test_continue_on_collection_errors(testdir):
     assert res.ret == 1
 
     res.stdout.fnmatch_lines(
-        ["collected 2 items / 2 errors", "*1 failed, 1 passed, 2 error*"]
+        ["collected 2 items / 2 errors", "*1 failed, 1 passed, 2 errors*"]
     )
 
 
@@ -909,7 +963,7 @@ def test_continue_on_collection_errors_maxfail(testdir):
     res = testdir.runpytest("--continue-on-collection-errors", "--maxfail=3")
     assert res.ret == 1
 
-    res.stdout.fnmatch_lines(["collected 2 items / 2 errors", "*1 failed, 2 error*"])
+    res.stdout.fnmatch_lines(["collected 2 items / 2 errors", "*1 failed, 2 errors*"])
 
 
 def test_fixture_scope_sibling_conftests(testdir):
@@ -996,12 +1050,12 @@ def test_collect_init_tests(testdir):
     result.stdout.fnmatch_lines(
         ["<Package */tests>", "  <Module test_foo.py>", "    <Function test_foo>"]
     )
-    assert "test_init" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*test_init*")
     result = testdir.runpytest("./tests/__init__.py", "--collect-only")
     result.stdout.fnmatch_lines(
         ["<Package */tests>", "  <Module __init__.py>", "    <Function test_init>"]
     )
-    assert "test_foo" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*test_foo*")
 
 
 def test_collect_invalid_signature_message(testdir):
@@ -1161,7 +1215,7 @@ def test_collect_symlink_out_of_tree(testdir):
     assert result.ret == 0
 
 
-def test_collectignore_via_conftest(testdir, monkeypatch):
+def test_collectignore_via_conftest(testdir):
     """collect_ignore in parent conftest skips importing child (issue #4592)."""
     tests = testdir.mkpydir("tests")
     tests.ensure("conftest.py").write("collect_ignore = ['ignore_me']")
@@ -1253,7 +1307,28 @@ def test_collector_respects_tbstyle(testdir):
             '  File "*/test_collector_respects_tbstyle.py", line 1, in <module>',
             "    assert 0",
             "AssertionError: assert 0",
-            "*! Interrupted: 1 errors during collection !*",
+            "*! Interrupted: 1 error during collection !*",
             "*= 1 error in *",
         ]
     )
+
+
+def test_does_not_eagerly_collect_packages(testdir):
+    testdir.makepyfile("def test(): pass")
+    pydir = testdir.mkpydir("foopkg")
+    pydir.join("__init__.py").write("assert False")
+    result = testdir.runpytest()
+    assert result.ret == ExitCode.OK
+
+
+def test_does_not_put_src_on_path(testdir):
+    # `src` is not on sys.path so it should not be importable
+    testdir.tmpdir.join("src/nope/__init__.py").ensure()
+    testdir.makepyfile(
+        "import pytest\n"
+        "def test():\n"
+        "    with pytest.raises(ImportError):\n"
+        "        import nope\n"
+    )
+    result = testdir.runpytest()
+    assert result.ret == ExitCode.OK

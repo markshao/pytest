@@ -104,6 +104,7 @@ For information about fixtures, see :ref:`fixtures`. To see a complete list of a
 
         Captured logs are available through the following properties/methods::
 
+        * caplog.messages        -> list of format-interpolated log messages
         * caplog.text            -> string containing formatted log output
         * caplog.records         -> list of logging.LogRecord instances
         * caplog.record_tuples   -> list of (logger_name, level, message) tuples
@@ -136,8 +137,10 @@ For information about fixtures, see :ref:`fixtures`. To see a complete list of a
     tmpdir_factory [session scope]
         Return a :class:`_pytest.tmpdir.TempdirFactory` instance for the test session.
 
+
     tmp_path_factory [session scope]
         Return a :class:`_pytest.tmpdir.TempPathFactory` instance for the test session.
+
 
     tmpdir
         Return a temporary directory path object

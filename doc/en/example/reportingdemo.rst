@@ -81,8 +81,8 @@ Here is a nice run of several failures and how ``pytest`` presents things:
         def test_eq_text(self):
     >       assert "spam" == "eggs"
     E       AssertionError: assert 'spam' == 'eggs'
-    E         - spam
-    E         + eggs
+    E         - eggs
+    E         + spam
 
     failure_demo.py:45: AssertionError
     _____________ TestSpecialisedExplanations.test_eq_similar_text _____________
@@ -92,9 +92,9 @@ Here is a nice run of several failures and how ``pytest`` presents things:
         def test_eq_similar_text(self):
     >       assert "foo 1 bar" == "foo 2 bar"
     E       AssertionError: assert 'foo 1 bar' == 'foo 2 bar'
-    E         - foo 1 bar
+    E         - foo 2 bar
     E         ?     ^
-    E         + foo 2 bar
+    E         + foo 1 bar
     E         ?     ^
 
     failure_demo.py:48: AssertionError
@@ -106,8 +106,8 @@ Here is a nice run of several failures and how ``pytest`` presents things:
     >       assert "foo\nspam\nbar" == "foo\neggs\nbar"
     E       AssertionError: assert 'foo\nspam\nbar' == 'foo\neggs\nbar'
     E           foo
-    E         - spam
-    E         + eggs
+    E         - eggs
+    E         + spam
     E           bar
 
     failure_demo.py:51: AssertionError
@@ -122,9 +122,9 @@ Here is a nice run of several failures and how ``pytest`` presents things:
     E       AssertionError: assert '111111111111...2222222222222' == '111111111111...2222222222222'
     E         Skipping 90 identical leading characters in diff, use -v to show
     E         Skipping 91 identical trailing characters in diff, use -v to show
-    E         - 1111111111a222222222
+    E         - 1111111111b222222222
     E         ?           ^
-    E         + 1111111111b222222222
+    E         + 1111111111a222222222
     E         ?           ^
 
     failure_demo.py:56: AssertionError
@@ -406,7 +406,7 @@ Here is a nice run of several failures and how ``pytest`` presents things:
     self = <failure_demo.TestRaises object at 0xdeadbeef>
 
         def test_raises_doesnt(self):
-    >       raises(IOError, int, "3")
+    >       raises(OSError, int, "3")
     E       Failed: DID NOT RAISE <class 'OSError'>
 
     failure_demo.py:170: Failed
@@ -650,4 +650,49 @@ Here is a nice run of several failures and how ``pytest`` presents things:
     E        +  where 1 = This is JSON\n{\n  'foo': 'bar'\n}.a
 
     failure_demo.py:282: AssertionError
+    ========================= short test summary info ==========================
+    FAILED failure_demo.py::test_generative[3-6] - assert (3 * 2) < 6
+    FAILED failure_demo.py::TestFailing::test_simple - assert 42 == 43
+    FAILED failure_demo.py::TestFailing::test_simple_multiline - assert 42 == 54
+    FAILED failure_demo.py::TestFailing::test_not - assert not 42
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_eq_text - Asser...
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_eq_similar_text
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_eq_multiline_text
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_eq_long_text - ...
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_eq_long_text_multiline
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_eq_list - asser...
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_eq_list_long - ...
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_eq_dict - Asser...
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_eq_set - Assert...
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_eq_longer_list
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_in_list - asser...
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_not_in_text_multiline
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_not_in_text_single
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_not_in_text_single_long
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_not_in_text_single_long_term
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_eq_dataclass - ...
+    FAILED failure_demo.py::TestSpecialisedExplanations::test_eq_attrs - Asse...
+    FAILED failure_demo.py::test_attribute - assert 1 == 2
+    FAILED failure_demo.py::test_attribute_instance - AssertionError: assert ...
+    FAILED failure_demo.py::test_attribute_failure - Exception: Failed to get...
+    FAILED failure_demo.py::test_attribute_multiple - AssertionError: assert ...
+    FAILED failure_demo.py::TestRaises::test_raises - ValueError: invalid lit...
+    FAILED failure_demo.py::TestRaises::test_raises_doesnt - Failed: DID NOT ...
+    FAILED failure_demo.py::TestRaises::test_raise - ValueError: demo error
+    FAILED failure_demo.py::TestRaises::test_tupleerror - ValueError: not eno...
+    FAILED failure_demo.py::TestRaises::test_reinterpret_fails_with_print_for_the_fun_of_it
+    FAILED failure_demo.py::TestRaises::test_some_error - NameError: name 'na...
+    FAILED failure_demo.py::test_dynamic_compile_shows_nicely - AssertionError
+    FAILED failure_demo.py::TestMoreErrors::test_complex_error - assert 44 == 43
+    FAILED failure_demo.py::TestMoreErrors::test_z1_unpack_error - ValueError...
+    FAILED failure_demo.py::TestMoreErrors::test_z2_type_error - TypeError: c...
+    FAILED failure_demo.py::TestMoreErrors::test_startswith - AssertionError:...
+    FAILED failure_demo.py::TestMoreErrors::test_startswith_nested - Assertio...
+    FAILED failure_demo.py::TestMoreErrors::test_global_func - assert False
+    FAILED failure_demo.py::TestMoreErrors::test_instance - assert 42 != 42
+    FAILED failure_demo.py::TestMoreErrors::test_compare - assert 11 < 5
+    FAILED failure_demo.py::TestMoreErrors::test_try_finally - assert 1 == 0
+    FAILED failure_demo.py::TestCustomAssertMsg::test_single_line - Assertion...
+    FAILED failure_demo.py::TestCustomAssertMsg::test_multiline - AssertionEr...
+    FAILED failure_demo.py::TestCustomAssertMsg::test_custom_repr - Assertion...
     ============================ 44 failed in 0.12s ============================

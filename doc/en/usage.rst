@@ -33,7 +33,7 @@ Running ``pytest`` can result in six different exit codes:
 :Exit code 4: pytest command line usage error
 :Exit code 5: No tests were collected
 
-They are represented by the :class:`_pytest.main.ExitCode` enum. The exit codes being a part of the public API can be imported and accessed directly using:
+They are represented by the :class:`_pytest.config.ExitCode` enum. The exit codes being a part of the public API can be imported and accessed directly using:
 
 .. code-block:: python
 
@@ -66,8 +66,8 @@ To stop the testing process after the first (N) failures:
 
 .. code-block:: bash
 
-    pytest -x            # stop after first failure
-    pytest --maxfail=2    # stop after two failures
+    pytest -x           # stop after first failure
+    pytest --maxfail=2  # stop after two failures
 
 .. _select-tests:
 
@@ -94,8 +94,8 @@ Pytest supports several ways to run and select tests from the command-line.
 
     pytest -k "MyClass and not method"
 
-This will run tests which contain names that match the given *string expression*, which can
-include Python operators that use filenames, class names and function names as variables.
+This will run tests which contain names that match the given *string expression* (case-insensitive),
+which can include Python operators that use filenames, class names and function names as variables.
 The example above will run ``TestMyClass.test_something``  but not ``TestMyClass.test_method_simple``.
 
 .. _nodeids:
@@ -169,10 +169,10 @@ option you make sure a trace is shown.
 Detailed summary report
 -----------------------
 
-
-
 The ``-r`` flag can be used to display a "short test summary info" at the end of the test session,
 making it easy in large test suites to get a clear picture of all failures, skips, xfails, etc.
+
+It defaults to ``fE`` to list failures and errors.
 
 Example:
 
@@ -241,7 +241,7 @@ Example:
 
     test_example.py:14: AssertionError
     ========================= short test summary info ==========================
-    SKIPPED [1] $REGENDOC_TMPDIR/test_example.py:23: skipping this test
+    SKIPPED [1] $REGENDOC_TMPDIR/test_example.py:22: skipping this test
     XFAIL test_example.py::test_xfail
       reason: xfailing this test
     XPASS test_example.py::test_xpass always xfail
@@ -261,8 +261,12 @@ Here is the full list of available characters that can be used:
  - ``X`` - xpassed
  - ``p`` - passed
  - ``P`` - passed with output
+
+Special characters for (de)selection of groups:
+
  - ``a`` - all except ``pP``
  - ``A`` - all
+ - ``N`` - none, this can be used to display nothing (since ``fE`` is the default)
 
 More than one character can be used, so for example to only see failed and skipped tests, you can execute:
 
@@ -296,7 +300,7 @@ More than one character can be used, so for example to only see failed and skipp
     test_example.py:14: AssertionError
     ========================= short test summary info ==========================
     FAILED test_example.py::test_fail - assert 0
-    SKIPPED [1] $REGENDOC_TMPDIR/test_example.py:23: skipping this test
+    SKIPPED [1] $REGENDOC_TMPDIR/test_example.py:22: skipping this test
     == 1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12s ===
 
 Using ``p`` lists the passing tests, whilst ``P`` adds an extra section "PASSES" with those tests that passed but had
@@ -679,12 +683,6 @@ Creating resultlog format files
 ----------------------------------------------------
 
 
-
-    This option is rarely used and is scheduled for removal in 5.0.
-
-    See `the deprecation docs <https://docs.pytest.org/en/latest/deprecations.html#result-log-result-log>`__
-    for more information.
-
 To create plain-text machine-readable result files you can issue:
 
 .. code-block:: bash
@@ -693,6 +691,16 @@ To create plain-text machine-readable result files you can issue:
 
 and look at the content at the ``path`` location.  Such files are used e.g.
 by the `PyPy-test`_ web page to show test results over several revisions.
+
+.. warning::
+
+    This option is rarely used and is scheduled for removal in pytest 6.0.
+
+    If you use this option, consider using the new `pytest-reportlog <https://github.com/pytest-dev/pytest-reportlog>`__ plugin instead.
+
+    See `the deprecation docs <https://docs.pytest.org/en/latest/deprecations.html#result-log-result-log>`__
+    for more information.
+
 
 .. _`PyPy-test`: http://buildbot.pypy.org/summary
 
@@ -717,6 +725,11 @@ for example ``-x`` if you only want to send one particular failure.
     pytest --pastebin=all
 
 Currently only pasting to the http://bpaste.net service is implemented.
+
+.. versionchanged:: 5.2
+
+If creating the URL fails for any reason, a warning is generated instead of failing the
+entire test suite.
 
 Early loading plugins
 ---------------------
@@ -808,6 +821,9 @@ hook was invoked:
     E       assert 0
 
     test_example.py:14: AssertionError
+    ========================= short test summary info ==========================
+    FAILED test_example.py::test_fail - assert 0
+    ERROR test_example.py::test_error - assert 0
 
 .. note::
 
@@ -818,5 +834,4 @@ hook was invoked:
     multiple calls to ``pytest.main()`` from the same process (in order to re-run
     tests, for example) is not recommended.
 
-
-.. include:: links.inc
+.. _jenkins: http://jenkins-ci.org/

@@ -1,26 +1,22 @@
 import contextlib
 import io
 import os
-import pickle
 import subprocess
 import sys
 import textwrap
 from io import UnsupportedOperation
-
-import py
+from typing import BinaryIO
+from typing import Generator
 
 import pytest
 from _pytest import capture
+from _pytest.capture import _get_multicapture
 from _pytest.capture import CaptureManager
-from _pytest.main import ExitCode
+from _pytest.capture import MultiCapture
+from _pytest.config import ExitCode
 
 # note: py.io capture tests where copied from
 # pylib 1.4.20.dev2 (rev 13d9af95547e)
-
-
-needsosdup = pytest.mark.skipif(
-    not hasattr(os, "dup"), reason="test needs os.dup, not available on this platform"
-)
 
 
 def StdCaptureFD(out=True, err=True, in_=True):
@@ -31,23 +27,12 @@ def StdCapture(out=True, err=True, in_=True):
     return capture.MultiCapture(out, err, in_, Capture=capture.SysCapture)
 
 
+def TeeStdCapture(out=True, err=True, in_=True):
+    return capture.MultiCapture(out, err, in_, Capture=capture.TeeSysCapture)
+
+
 class TestCaptureManager:
-    def test_getmethod_default_no_fd(self, monkeypatch):
-        from _pytest.capture import pytest_addoption
-        from _pytest.config.argparsing import Parser
-
-        parser = Parser()
-        pytest_addoption(parser)
-        default = parser._groups[0].options[0].default
-        assert default == "fd" if hasattr(os, "dup") else "sys"
-        parser = Parser()
-        monkeypatch.delattr(os, "dup", raising=False)
-        pytest_addoption(parser)
-        assert parser._groups[0].options[0].default == "sys"
-
-    @pytest.mark.parametrize(
-        "method", ["no", "sys", pytest.param("fd", marks=needsosdup)]
-    )
+    @pytest.mark.parametrize("method", ["no", "sys", "fd"])
     def test_capturing_basic_api(self, method):
         capouter = StdCaptureFD()
         old = sys.stdout, sys.stderr, sys.stdin
@@ -77,7 +62,6 @@ class TestCaptureManager:
         finally:
             capouter.stop_capturing()
 
-    @needsosdup
     def test_init_capturing(self):
         capouter = StdCaptureFD()
         try:
@@ -91,8 +75,6 @@ class TestCaptureManager:
 
 @pytest.mark.parametrize("method", ["fd", "sys"])
 def test_capturing_unicode(testdir, method):
-    if hasattr(sys, "pypy_version_info") and sys.pypy_version_info < (2, 2):
-        pytest.xfail("does not work on pypy < 2.2")
     obj = "'b\u00f6y'"
     testdir.makepyfile(
         """\
@@ -432,7 +414,7 @@ class TestCaptureFixture:
                 out, err = capsys.readouterr()
                 assert out.startswith("42")
             """,
-            *opt
+            *opt,
         )
         reprec.assertoutcome(passed=1)
 
@@ -452,7 +434,7 @@ class TestCaptureFixture:
                 "E*capfd*capsys*same*time*",
                 "*ERROR*setup*test_two*",
                 "E*capsys*capfd*same*time*",
-                "*2 error*",
+                "*2 errors*",
             ]
         )
 
@@ -472,9 +454,9 @@ class TestCaptureFixture:
         result.stdout.fnmatch_lines(
             [
                 "*test_one*",
-                "*capsys*capfd*same*time*",
+                "E * cannot use capfd and capsys at the same time",
                 "*test_two*",
-                "*capfd*capsys*same*time*",
+                "E * cannot use capsys and capfd at the same time",
                 "*2 failed in*",
             ]
         )
@@ -505,7 +487,6 @@ class TestCaptureFixture:
         result = testdir.runpytest(p)
         result.stdout.fnmatch_lines(["xxx42xxx"])
 
-    @needsosdup
     def test_stdfd_functional(self, testdir):
         reprec = testdir.inline_runsource(
             """\
@@ -519,7 +500,6 @@ class TestCaptureFixture:
         )
         reprec.assertoutcome(passed=1)
 
-    @needsosdup
     def test_capfdbinary(self, testdir):
         reprec = testdir.inline_runsource(
             """\
@@ -535,18 +515,40 @@ class TestCaptureFixture:
         reprec.assertoutcome(passed=1)
 
     def test_capsysbinary(self, testdir):
-        reprec = testdir.inline_runsource(
-            """\
+        p1 = testdir.makepyfile(
+            r"""
             def test_hello(capsysbinary):
                 import sys
-                # some likely un-decodable bytes
-                sys.stdout.buffer.write(b'\\xfe\\x98\\x20')
+
+                sys.stdout.buffer.write(b'hello')
+
+                # Some likely un-decodable bytes.
+                sys.stdout.buffer.write(b'\xfe\x98\x20')
+
+                sys.stdout.buffer.flush()
+
+                # Ensure writing in text mode still works and is captured.
+                # https://github.com/pytest-dev/pytest/issues/6871
+                print("world", flush=True)
+
                 out, err = capsysbinary.readouterr()
-                assert out == b'\\xfe\\x98\\x20'
+                assert out == b'hello\xfe\x98\x20world\n'
                 assert err == b''
+
+                print("stdout after")
+                print("stderr after", file=sys.stderr)
             """
         )
-        reprec.assertoutcome(passed=1)
+        result = testdir.runpytest(str(p1), "-rA")
+        result.stdout.fnmatch_lines(
+            [
+                "*- Captured stdout call -*",
+                "stdout after",
+                "*- Captured stderr call -*",
+                "stderr after",
+                "*= 1 passed in *",
+            ]
+        )
 
     def test_partial_setup_failure(self, testdir):
         p = testdir.makepyfile(
@@ -558,7 +560,6 @@ class TestCaptureFixture:
         result = testdir.runpytest(p)
         result.stdout.fnmatch_lines(["*test_partial_setup_failure*", "*1 error*"])
 
-    @needsosdup
     def test_keyboardinterrupt_disables_capturing(self, testdir):
         p = testdir.makepyfile(
             """\
@@ -604,17 +605,13 @@ class TestCaptureFixture:
         )
         args = ("-s",) if no_capture else ()
         result = testdir.runpytest_subprocess(*args)
-        result.stdout.fnmatch_lines(
-            """
-            *while capture is disabled*
-        """
-        )
-        assert "captured before" not in result.stdout.str()
-        assert "captured after" not in result.stdout.str()
+        result.stdout.fnmatch_lines(["*while capture is disabled*", "*= 2 passed in *"])
+        result.stdout.no_fnmatch_line("*captured before*")
+        result.stdout.no_fnmatch_line("*captured after*")
         if no_capture:
             assert "test_normal executed" in result.stdout.str()
         else:
-            assert "test_normal executed" not in result.stdout.str()
+            result.stdout.no_fnmatch_line("*test_normal executed*")
 
     @pytest.mark.parametrize("fixture", ["capsys", "capfd"])
     def test_fixture_use_by_other_fixtures(self, testdir, fixture):
@@ -650,8 +647,8 @@ class TestCaptureFixture:
         )
         result = testdir.runpytest_subprocess()
         result.stdout.fnmatch_lines(["*1 passed*"])
-        assert "stdout contents begin" not in result.stdout.str()
-        assert "stderr contents begin" not in result.stdout.str()
+        result.stdout.no_fnmatch_line("*stdout contents begin*")
+        result.stdout.no_fnmatch_line("*stderr contents begin*")
 
     @pytest.mark.parametrize("cap", ["capsys", "capfd"])
     def test_fixture_use_by_other_fixtures_teardown(self, testdir, cap):
@@ -697,20 +694,6 @@ def test_setup_failure_does_not_kill_capturing(testdir):
     result.stdout.fnmatch_lines(["*ValueError(42)*", "*1 error*"])
 
 
-def test_fdfuncarg_skips_on_no_osdup(testdir):
-    testdir.makepyfile(
-        """
-        import os
-        if hasattr(os, 'dup'):
-            del os.dup
-        def test_hello(capfd):
-            pass
-    """
-    )
-    result = testdir.runpytest_subprocess("--capture=no")
-    result.stdout.fnmatch_lines(["*1 skipped*"])
-
-
 def test_capture_conftest_runtest_setup(testdir):
     testdir.makeconftest(
         """
@@ -721,7 +704,7 @@ def test_capture_conftest_runtest_setup(testdir):
     testdir.makepyfile("def test_func(): pass")
     result = testdir.runpytest()
     assert result.ret == 0
-    assert "hello19" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*hello19*")
 
 
 def test_capture_badoutput_issue412(testdir):
@@ -821,82 +804,45 @@ class TestCaptureIO:
         assert f.getvalue() == "foo\r\n"
 
 
+class TestCaptureAndPassthroughIO(TestCaptureIO):
+    def test_text(self):
+        sio = io.StringIO()
+        f = capture.CaptureAndPassthroughIO(sio)
+        f.write("hello")
+        s1 = f.getvalue()
+        assert s1 == "hello"
+        s2 = sio.getvalue()
+        assert s2 == s1
+        f.close()
+        sio.close()
+
+    def test_unicode_and_str_mixture(self):
+        sio = io.StringIO()
+        f = capture.CaptureAndPassthroughIO(sio)
+        f.write("\u00f6")
+        pytest.raises(TypeError, f.write, b"hello")
+
+
 def test_dontreadfrominput():
     from _pytest.capture import DontReadFromInput
 
     f = DontReadFromInput()
+    assert f.buffer is f
     assert not f.isatty()
-    pytest.raises(IOError, f.read)
-    pytest.raises(IOError, f.readlines)
+    pytest.raises(OSError, f.read)
+    pytest.raises(OSError, f.readlines)
     iter_f = iter(f)
-    pytest.raises(IOError, next, iter_f)
+    pytest.raises(OSError, next, iter_f)
     pytest.raises(UnsupportedOperation, f.fileno)
     f.close()  # just for completeness
 
 
-def test_dontreadfrominput_buffer_python3():
-    from _pytest.capture import DontReadFromInput
-
-    f = DontReadFromInput()
-    fb = f.buffer
-    assert not fb.isatty()
-    pytest.raises(IOError, fb.read)
-    pytest.raises(IOError, fb.readlines)
-    iter_f = iter(f)
-    pytest.raises(IOError, next, iter_f)
-    pytest.raises(ValueError, fb.fileno)
-    f.close()  # just for completeness
-
-
 @pytest.fixture
-def tmpfile(testdir):
+def tmpfile(testdir) -> Generator[BinaryIO, None, None]:
     f = testdir.makepyfile("").open("wb+")
     yield f
     if not f.closed:
         f.close()
-
-
-@needsosdup
-def test_dupfile(tmpfile):
-    flist = []
-    for i in range(5):
-        nf = capture.safe_text_dupfile(tmpfile, "wb")
-        assert nf != tmpfile
-        assert nf.fileno() != tmpfile.fileno()
-        assert nf not in flist
-        print(i, end="", file=nf)
-        flist.append(nf)
-
-    fname_open = flist[0].name
-    assert fname_open == repr(flist[0].buffer)
-
-    for i in range(5):
-        f = flist[i]
-        f.close()
-    fname_closed = flist[0].name
-    assert fname_closed == repr(flist[0].buffer)
-    assert fname_closed != fname_open
-    tmpfile.seek(0)
-    s = tmpfile.read()
-    assert "01234" in repr(s)
-    tmpfile.close()
-    assert fname_closed == repr(flist[0].buffer)
-
-
-def test_dupfile_on_bytesio():
-    bio = io.BytesIO()
-    f = capture.safe_text_dupfile(bio, "wb")
-    f.write("hello")
-    assert bio.getvalue() == b"hello"
-    assert "BytesIO object" in f.name
-
-
-def test_dupfile_on_textio():
-    tio = py.io.TextIO()
-    f = capture.safe_text_dupfile(tio, "wb")
-    f.write("hello")
-    assert tio.getvalue() == "hello"
-    assert not hasattr(f, "name")
 
 
 @contextlib.contextmanager
@@ -904,9 +850,9 @@ def lsof_check():
     pid = os.getpid()
     try:
         out = subprocess.check_output(("lsof", "-p", str(pid))).decode()
-    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError):
+    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError) as exc:
         # about UnicodeDecodeError, see note on pytester
-        pytest.skip("could not run 'lsof'")
+        pytest.skip("could not run 'lsof' ({!r})".format(exc))
     yield
     out2 = subprocess.check_output(("lsof", "-p", str(pid))).decode()
     len1 = len([x for x in out.split("\n") if "REG" in x])
@@ -915,8 +861,6 @@ def lsof_check():
 
 
 class TestFDCapture:
-    pytestmark = needsosdup
-
     def test_simple(self, tmpfile):
         fd = tmpfile.fileno()
         cap = capture.FDCapture(fd)
@@ -955,7 +899,7 @@ class TestFDCapture:
         cap.done()
         assert s == "hello\n"
 
-    def test_stdin(self, tmpfile):
+    def test_stdin(self):
         cap = capture.FDCapture(0)
         cap.start()
         x = os.read(0, 100).strip()
@@ -968,7 +912,7 @@ class TestFDCapture:
         cap.start()
         tmpfile.write(data1)
         tmpfile.flush()
-        cap.writeorg(data2)
+        cap.writeorg(data2.decode("ascii"))
         scap = cap.snap()
         cap.done()
         assert scap == data1.decode("ascii")
@@ -976,7 +920,7 @@ class TestFDCapture:
             stmp = stmp_file.read()
             assert stmp == data2
 
-    def test_simple_resume_suspend(self, tmpfile):
+    def test_simple_resume_suspend(self):
         with saved_fd(1):
             cap = capture.FDCapture(1)
             cap.start()
@@ -997,6 +941,18 @@ class TestFDCapture:
             cap.suspend()
             cap.done()
             pytest.raises(AttributeError, cap.suspend)
+
+            assert repr(cap) == (
+                "<FDCapture 1 oldfd=<UNSET> _state='done' tmpfile={!r}>".format(
+                    cap.tmpfile
+                )
+            )
+            # Should not crash with missing "_old".
+            assert repr(cap.syscapture) == (
+                "<SysCapture stdout _old=<UNSET> _state='done' tmpfile={!r}>".format(
+                    cap.syscapture.tmpfile
+                )
+            )
 
     def test_capfd_sys_stdout_mode(self, capfd):
         assert "b" not in sys.stdout.mode
@@ -1127,11 +1083,27 @@ class TestStdCapture:
         print("XXX which indicates an error in the underlying capturing")
         print("XXX mechanisms")
         with self.getcapture():
-            pytest.raises(IOError, sys.stdin.read)
+            pytest.raises(OSError, sys.stdin.read)
+
+
+class TestTeeStdCapture(TestStdCapture):
+    captureclass = staticmethod(TeeStdCapture)
+
+    def test_capturing_error_recursive(self):
+        """ for TeeStdCapture since we passthrough stderr/stdout, cap1
+        should get all output, while cap2 should only get "cap2\n" """
+
+        with self.getcapture() as cap1:
+            print("cap1")
+            with self.getcapture() as cap2:
+                print("cap2")
+                out2, err2 = cap2.readouterr()
+                out1, err1 = cap1.readouterr()
+        assert out1 == "cap1\ncap2\n"
+        assert out2 == "cap2\n"
 
 
 class TestStdCaptureFD(TestStdCapture):
-    pytestmark = needsosdup
     captureclass = staticmethod(StdCaptureFD)
 
     def test_simple_only_fd(self, testdir):
@@ -1174,8 +1146,6 @@ class TestStdCaptureFD(TestStdCapture):
 
 
 class TestStdCaptureFDinvalidFD:
-    pytestmark = needsosdup
-
     def test_stdcapture_fd_invalid_fd(self, testdir):
         testdir.makepyfile(
             """
@@ -1188,19 +1158,19 @@ class TestStdCaptureFDinvalidFD:
             def test_stdout():
                 os.close(1)
                 cap = StdCaptureFD(out=True, err=False, in_=False)
-                assert repr(cap.out) == "<FDCapture 1 oldfd=None _state=None>"
+                assert repr(cap.out) == "<FDCapture 1 oldfd=<UNSET> _state=None tmpfile=<UNSET>>"
                 cap.stop_capturing()
 
             def test_stderr():
                 os.close(2)
                 cap = StdCaptureFD(out=False, err=True, in_=False)
-                assert repr(cap.err) == "<FDCapture 2 oldfd=None _state=None>"
+                assert repr(cap.err) == "<FDCapture 2 oldfd=<UNSET> _state=None tmpfile=<UNSET>>"
                 cap.stop_capturing()
 
             def test_stdin():
                 os.close(0)
                 cap = StdCaptureFD(out=False, err=False, in_=True)
-                assert repr(cap.in_) == "<FDCapture 0 oldfd=None _state=None>"
+                assert repr(cap.in_) == "<FDCapture 0 oldfd=<UNSET> _state=None tmpfile=<UNSET>>"
                 cap.stop_capturing()
         """
         )
@@ -1231,7 +1201,6 @@ def test_capsys_results_accessible_by_attribute(capsys):
     assert capture_result.err == "eggs"
 
 
-@needsosdup
 @pytest.mark.parametrize("use", [True, False])
 def test_fdcapture_tmpfile_remains_the_same(tmpfile, use):
     if not use:
@@ -1247,7 +1216,6 @@ def test_fdcapture_tmpfile_remains_the_same(tmpfile, use):
     assert capfile2 == capfile
 
 
-@needsosdup
 def test_close_and_capture_again(testdir):
     testdir.makepyfile(
         """
@@ -1270,10 +1238,8 @@ def test_close_and_capture_again(testdir):
     )
 
 
-@pytest.mark.parametrize("method", ["SysCapture", "FDCapture"])
+@pytest.mark.parametrize("method", ["SysCapture", "FDCapture", "TeeSysCapture"])
 def test_capturing_and_logging_fundamentals(testdir, method):
-    if method == "StdCaptureFD" and not hasattr(os, "dup"):
-        pytest.skip("need os.dup")
     # here we check a fundamental feature
     p = testdir.makepyfile(
         """
@@ -1317,8 +1283,8 @@ def test_error_attribute_issue555(testdir):
         """
         import sys
         def test_capattr():
-            assert sys.stdout.errors == "strict"
-            assert sys.stderr.errors == "strict"
+            assert sys.stdout.errors == "replace"
+            assert sys.stderr.errors == "replace"
     """
     )
     reprec = testdir.inline_run()
@@ -1385,19 +1351,12 @@ def test_crash_on_closing_tmpfile_py27(testdir):
             printing.wait()
     """
     )
+    # Do not consider plugins like hypothesis, which might output to stderr.
+    testdir.monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
     result = testdir.runpytest_subprocess(str(p))
     assert result.ret == 0
     assert result.stderr.str() == ""
-    assert "IOError" not in result.stdout.str()
-
-
-def test_pickling_and_unpickling_encoded_file():
-    # See https://bitbucket.org/pytest-dev/pytest/pull-request/194
-    # pickle.loads() raises infinite recursion if
-    # EncodedFile.__getattr__ is not implemented properly
-    ef = capture.EncodedFile(None, None)
-    ef_as_str = pickle.dumps(ef)
-    pickle.loads(ef_as_str)
+    result.stdout.no_fnmatch_line("*OSError*")
 
 
 def test_global_capture_with_live_logging(testdir):
@@ -1502,11 +1461,35 @@ def test_typeerror_encodedfile_write(testdir):
     """
     )
     result_without_capture = testdir.runpytest("-s", str(p))
-
     result_with_capture = testdir.runpytest(str(p))
 
     assert result_with_capture.ret == result_without_capture.ret
+    out = result_with_capture.stdout.str()
+    assert ("TypeError: write() argument must be str, not bytes" in out) or (
+        "TypeError: unicode argument expected, got 'bytes'" in out
+    )
 
-    result_with_capture.stdout.fnmatch_lines(
-        ["E           TypeError: write() argument must be str, not bytes"]
+
+def test_stderr_write_returns_len(capsys):
+    """Write on Encoded files, namely captured stderr, should return number of characters written."""
+    assert sys.stderr.write("Foo") == 3
+
+
+def test_encodedfile_writelines(tmpfile: BinaryIO) -> None:
+    ef = capture.EncodedFile(tmpfile, encoding="utf-8")
+    with pytest.raises(TypeError):
+        ef.writelines([b"line1", b"line2"])
+    assert ef.writelines(["line3", "line4"]) is None  # type: ignore[func-returns-value]  # noqa: F821
+    ef.flush()
+    tmpfile.seek(0)
+    assert tmpfile.read() == b"line3line4"
+    tmpfile.close()
+    with pytest.raises(ValueError):
+        ef.read()
+
+
+def test__get_multicapture() -> None:
+    assert isinstance(_get_multicapture("no"), MultiCapture)
+    pytest.raises(ValueError, _get_multicapture, "unknown").match(
+        r"^unknown capturing method: 'unknown'"
     )

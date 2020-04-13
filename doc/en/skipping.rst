@@ -234,11 +234,11 @@ expect a test to fail:
     def test_function():
         ...
 
-This test will be run but no traceback will be reported
-when it fails. Instead terminal reporting will list it in the
-"expected to fail" (``XFAIL``) or "unexpectedly passing" (``XPASS``) sections.
+This test will run but no traceback will be reported when it fails. Instead, terminal
+reporting will list it in the "expected to fail" (``XFAIL``) or "unexpectedly
+passing" (``XPASS``) sections.
 
-Alternatively, you can also mark a test as ``XFAIL`` from within a test or setup function
+Alternatively, you can also mark a test as ``XFAIL`` from within the test or its setup function
 imperatively:
 
 .. code-block:: python
@@ -247,50 +247,47 @@ imperatively:
         if not valid_config():
             pytest.xfail("failing configuration (but should work)")
 
-This will unconditionally make ``test_function`` ``XFAIL``. Note that no other code is executed
-after ``pytest.xfail`` call, differently from the marker. That's because it is implemented
+.. code-block:: python
+
+    def test_function2():
+        import slow_module
+
+        if slow_module.slow_function():
+            pytest.xfail("slow_module taking too long")
+
+These two examples illustrate situations where you don't want to check for a condition
+at the module level, which is when a condition would otherwise be evaluated for marks.
+
+This will make ``test_function`` ``XFAIL``. Note that no other code is executed after
+the ``pytest.xfail`` call, differently from the marker. That's because it is implemented
 internally by raising a known exception.
 
 **Reference**: :ref:`pytest.mark.xfail ref`
 
 
-.. _`xfail strict tutorial`:
+``condition`` parameter
+~~~~~~~~~~~~~~~~~~~~~~~
 
-``strict`` parameter
-~~~~~~~~~~~~~~~~~~~~
-
-
-
-Both ``XFAIL`` and ``XPASS`` don't fail the test suite, unless the ``strict`` keyword-only
-parameter is passed as ``True``:
+If a test is only expected to fail under a certain condition, you can pass
+that condition as the first parameter:
 
 .. code-block:: python
 
-    @pytest.mark.xfail(strict=True)
+    @pytest.mark.xfail(sys.platform == "win32", reason="bug in a 3rd party library")
     def test_function():
         ...
 
-
-This will make ``XPASS`` ("unexpectedly passing") results from this test to fail the test suite.
-
-You can change the default value of the ``strict`` parameter using the
-``xfail_strict`` ini option:
-
-.. code-block:: ini
-
-    [pytest]
-    xfail_strict=true
-
+Note that you have to pass a reason as well (see the parameter description at
+:ref:`pytest.mark.xfail ref`).
 
 ``reason`` parameter
 ~~~~~~~~~~~~~~~~~~~~
 
-As with skipif_ you can also mark your expectation of a failure
-on a particular platform:
+You can specify the motive of an expected failure with the ``reason`` parameter:
 
 .. code-block:: python
 
-    @pytest.mark.xfail(sys.version_info >= (3, 6), reason="python3.6 api changes")
+    @pytest.mark.xfail(reason="known parser issue")
     def test_function():
         ...
 
@@ -324,6 +321,31 @@ even executed, use the ``run`` parameter as ``False``:
 
 This is specially useful for xfailing tests that are crashing the interpreter and should be
 investigated later.
+
+.. _`xfail strict tutorial`:
+
+``strict`` parameter
+~~~~~~~~~~~~~~~~~~~~
+
+Both ``XFAIL`` and ``XPASS`` don't fail the test suite by default.
+You can change this by setting the ``strict`` keyword-only parameter to ``True``:
+
+.. code-block:: python
+
+    @pytest.mark.xfail(strict=True)
+    def test_function():
+        ...
+
+
+This will make ``XPASS`` ("unexpectedly passing") results from this test to fail the test suite.
+
+You can change the default value of the ``strict`` parameter using the
+``xfail_strict`` ini option:
+
+.. code-block:: ini
+
+    [pytest]
+    xfail_strict=true
 
 
 Ignoring xfail

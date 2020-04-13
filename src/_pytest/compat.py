@@ -4,20 +4,41 @@ python version compatibility code
 import functools
 import inspect
 import io
+import os
 import re
 import sys
 from contextlib import contextmanager
 from inspect import Parameter
 from inspect import signature
+from typing import Any
+from typing import Callable
+from typing import Generic
+from typing import IO
+from typing import Optional
 from typing import overload
+from typing import Tuple
+from typing import TypeVar
+from typing import Union
 
 import attr
 import py
 
-import _pytest
 from _pytest._io.saferepr import saferepr
 from _pytest.outcomes import fail
 from _pytest.outcomes import TEST_OUTCOME
+
+if sys.version_info < (3, 5, 2):
+    TYPE_CHECKING = False  # type: bool
+else:
+    from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from typing import Type  # noqa: F401 (used in type string)
+
+
+_T = TypeVar("_T")
+_S = TypeVar("_S")
 
 
 NOTSET = object()
@@ -28,12 +49,12 @@ MODULE_NOT_FOUND_ERROR = (
 
 
 if sys.version_info >= (3, 8):
-    from importlib import metadata as importlib_metadata  # noqa: F401
+    from importlib import metadata as importlib_metadata
 else:
     import importlib_metadata  # noqa: F401
 
 
-def _format_args(func):
+def _format_args(func: Callable[..., Any]) -> str:
     return str(signature(func))
 
 
@@ -41,12 +62,25 @@ def _format_args(func):
 REGEX_TYPE = type(re.compile(""))
 
 
-def is_generator(func):
+if sys.version_info < (3, 6):
+
+    def fspath(p):
+        """os.fspath replacement, useful to point out when we should replace it by the
+        real function once we drop py35.
+        """
+        return str(p)
+
+
+else:
+    fspath = os.fspath
+
+
+def is_generator(func: object) -> bool:
     genfunc = inspect.isgeneratorfunction(func)
     return genfunc and not iscoroutinefunction(func)
 
 
-def iscoroutinefunction(func):
+def iscoroutinefunction(func: object) -> bool:
     """
     Return True if func is a coroutine function (a function defined with async
     def syntax, and doesn't contain yield), or a function decorated with
@@ -59,16 +93,18 @@ def iscoroutinefunction(func):
     return inspect.iscoroutinefunction(func) or getattr(func, "_is_coroutine", False)
 
 
-def getlocation(function, curdir=None):
+def getlocation(function, curdir=None) -> str:
     function = get_real_func(function)
     fn = py.path.local(inspect.getfile(function))
     lineno = function.__code__.co_firstlineno
-    if curdir is not None and fn.relto(curdir):
-        fn = fn.relto(curdir)
+    if curdir is not None:
+        relfn = fn.relto(curdir)
+        if relfn:
+            return "%s:%d" % (relfn, lineno + 1)
     return "%s:%d" % (fn, lineno + 1)
 
 
-def num_mock_patch_args(function):
+def num_mock_patch_args(function) -> int:
     """ return number of arguments used up by mock arguments (if any) """
     patchings = getattr(function, "patchings", None)
     if not patchings:
@@ -87,7 +123,13 @@ def num_mock_patch_args(function):
     )
 
 
-def getfuncargnames(function, *, name: str = "", is_method=False, cls=None):
+def getfuncargnames(
+    function: Callable[..., Any],
+    *,
+    name: str = "",
+    is_method: bool = False,
+    cls: Optional[type] = None
+) -> Tuple[str, ...]:
     """Returns the names of a function's mandatory arguments.
 
     This should return the names of all function arguments that:
@@ -101,12 +143,12 @@ def getfuncargnames(function, *, name: str = "", is_method=False, cls=None):
     the case of cls, the function is a static method.
 
     The name parameter should be the original name in which the function was collected.
-
-    @RonnyPfannschmidt: This function should be refactored when we
-    revisit fixtures. The fixture mechanism should ask the node for
-    the fixture names, and not try to obtain directly from the
-    function object well after collection has occurred.
     """
+    # TODO(RonnyPfannschmidt): This function should be refactored when we
+    # revisit fixtures. The fixture mechanism should ask the node for
+    # the fixture names, and not try to obtain directly from the
+    # function object well after collection has occurred.
+
     # The parameters attribute of a Signature object contains an
     # ordered mapping of parameter names to Parameter instances.  This
     # creates a tuple of the names of the parameters that don't have
@@ -155,7 +197,7 @@ else:
     from contextlib import nullcontext  # noqa
 
 
-def get_default_arg_names(function):
+def get_default_arg_names(function: Callable[..., Any]) -> Tuple[str, ...]:
     # Note: this code intentionally mirrors the code at the beginning of getfuncargnames,
     # to get the arguments which were excluded from its result because they had default values
     return tuple(
@@ -174,18 +216,18 @@ _non_printable_ascii_translate_table.update(
 )
 
 
-def _translate_non_printable(s):
+def _translate_non_printable(s: str) -> str:
     return s.translate(_non_printable_ascii_translate_table)
 
 
 STRING_TYPES = bytes, str
 
 
-def _bytes_to_ascii(val):
+def _bytes_to_ascii(val: bytes) -> str:
     return val.decode("ascii", "backslashreplace")
 
 
-def ascii_escaped(val):
+def ascii_escaped(val: Union[bytes, str]) -> str:
     """If val is pure ascii, returns it as a str().  Otherwise, escapes
     bytes objects into a sequence of escaped bytes:
 
@@ -265,16 +307,6 @@ def get_real_method(obj, holder):
     return obj
 
 
-def getfslineno(obj):
-    # xxx let decorators etc specify a sane ordering
-    obj = get_real_func(obj)
-    if hasattr(obj, "place_as"):
-        obj = obj.place_as
-    fslineno = _pytest._code.getfslineno(obj)
-    assert isinstance(fslineno[1], int), obj
-    return fslineno
-
-
 def getimfunc(func):
     try:
         return func.__func__
@@ -282,7 +314,7 @@ def getimfunc(func):
         return func
 
 
-def safe_getattr(object, name, default):
+def safe_getattr(object: Any, name: str, default: Any) -> Any:
     """ Like getattr but return default upon any Exception or any OutcomeException.
 
     Attribute access can potentially fail for 'evil' Python objects.
@@ -296,7 +328,7 @@ def safe_getattr(object, name, default):
         return default
 
 
-def safe_isclass(obj):
+def safe_isclass(obj: object) -> bool:
     """Ignore any exception via isinstance on Python 3."""
     try:
         return inspect.isclass(obj)
@@ -304,53 +336,26 @@ def safe_isclass(obj):
         return False
 
 
-COLLECT_FAKEMODULE_ATTRIBUTES = (
-    "Collector",
-    "Module",
-    "Function",
-    "Instance",
-    "Session",
-    "Item",
-    "Class",
-    "File",
-    "_fillfuncargs",
-)
-
-
-def _setup_collect_fakemodule():
-    from types import ModuleType
-    import pytest
-
-    pytest.collect = ModuleType("pytest.collect")
-    pytest.collect.__all__ = []  # used for setns
-    for attr_name in COLLECT_FAKEMODULE_ATTRIBUTES:
-        setattr(pytest.collect, attr_name, getattr(pytest, attr_name))
-
-
 class CaptureIO(io.TextIOWrapper):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(io.BytesIO(), encoding="UTF-8", newline="", write_through=True)
 
-    def getvalue(self):
+    def getvalue(self) -> str:
+        assert isinstance(self.buffer, io.BytesIO)
         return self.buffer.getvalue().decode("UTF-8")
 
 
-class FuncargnamesCompatAttr:
-    """ helper class so that Metafunc, Function and FixtureRequest
-    don't need to each define the "funcargnames" compatibility attribute.
-    """
+class CaptureAndPassthroughIO(CaptureIO):
+    def __init__(self, other: IO) -> None:
+        self._other = other
+        super().__init__()
 
-    @property
-    def funcargnames(self):
-        """ alias attribute for ``fixturenames`` for pre-2.3 compatibility"""
-        import warnings
-        from _pytest.deprecated import FUNCARGNAMES
-
-        warnings.warn(FUNCARGNAMES, stacklevel=2)
-        return self.fixturenames
+    def write(self, s) -> int:
+        super().write(s)
+        return self._other.write(s)
 
 
-if sys.version_info < (3, 5, 2):  # pragma: no cover
+if sys.version_info < (3, 5, 2):
 
     def overload(f):  # noqa: F811
         return f
@@ -360,3 +365,33 @@ if getattr(attr, "__version_info__", ()) >= (19, 2):
     ATTRS_EQ_FIELD = "eq"
 else:
     ATTRS_EQ_FIELD = "cmp"
+
+
+if sys.version_info >= (3, 8):
+    from functools import cached_property
+else:
+
+    class cached_property(Generic[_S, _T]):
+        __slots__ = ("func", "__doc__")
+
+        def __init__(self, func: Callable[[_S], _T]) -> None:
+            self.func = func
+            self.__doc__ = func.__doc__
+
+        @overload
+        def __get__(
+            self, instance: None, owner: Optional["Type[_S]"] = ...
+        ) -> "cached_property[_S, _T]":
+            raise NotImplementedError()
+
+        @overload  # noqa: F811
+        def __get__(  # noqa: F811
+            self, instance: _S, owner: Optional["Type[_S]"] = ...
+        ) -> _T:
+            raise NotImplementedError()
+
+        def __get__(self, instance, owner=None):  # noqa: F811
+            if instance is None:
+                return self
+            value = instance.__dict__[self.func.__name__] = self.func(instance)
+            return value

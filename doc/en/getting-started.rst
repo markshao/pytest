@@ -28,7 +28,7 @@ Install ``pytest``
 .. code-block:: bash
 
     $ pytest --version
-    This is pytest version 5.x.y, imported from $PYTHON_PREFIX/lib/python3.7/site-packages/pytest.py
+    This is pytest version 5.x.y, imported from $PYTHON_PREFIX/lib/python3.8/site-packages/pytest/__init__.py
 
 .. _`simpletest`:
 
@@ -69,6 +69,8 @@ That’s it. You can now execute the test function:
     E        +  where 4 = func(3)
 
     test_sample.py:6: AssertionError
+    ========================= short test summary info ==========================
+    FAILED test_sample.py::test_answer - assert 4 == 5
     ============================ 1 failed in 0.12s =============================
 
 This test returns a failure report because ``func(3)`` does not return ``5``.
@@ -127,7 +129,7 @@ Once you develop multiple tests, you may want to group them into a class. pytest
             x = "hello"
             assert hasattr(x, "check")
 
-``pytest`` discovers all tests following its :ref:`Conventions for Python test discovery <test discovery>`, so it finds both ``test_`` prefixed functions. There is no need to subclass anything. We can simply run the module by passing its filename:
+``pytest`` discovers all tests following its :ref:`Conventions for Python test discovery <test discovery>`, so it finds both ``test_`` prefixed functions. There is no need to subclass anything, but make sure to prefix your class with ``Test`` otherwise the class will be skipped. We can simply run the module by passing its filename:
 
 .. code-block:: pytest
 
@@ -145,6 +147,8 @@ Once you develop multiple tests, you may want to group them into a class. pytest
     E        +  where False = hasattr('hello', 'check')
 
     test_class.py:8: AssertionError
+    ========================= short test summary info ==========================
+    FAILED test_class.py::TestClass::test_two - AssertionError: assert False
     1 failed, 1 passed in 0.12s
 
 The first test passed and the second failed. You can easily see the intermediate values in the assertion to help you understand the reason for the failure.
@@ -180,6 +184,8 @@ List the name ``tmpdir`` in the test function signature and ``pytest`` will look
     test_tmpdir.py:3: AssertionError
     --------------------------- Captured stdout call ---------------------------
     PYTEST_TMPDIR/test_needsfiles0
+    ========================= short test summary info ==========================
+    FAILED test_tmpdir.py::test_needsfiles - assert 0
     1 failed in 0.12s
 
 More info on tmpdir handling is available at :ref:`Temporary directories and files <tmpdir handling>`.
@@ -203,5 +209,3 @@ Check out additional pytest resources to help you customize tests for your uniqu
 * ":ref:`fixtures`" for providing a functional baseline to your tests
 * ":ref:`plugins`" for managing and writing plugins
 * ":ref:`goodpractices`" for virtualenv and test layouts
-
-.. include:: links.inc

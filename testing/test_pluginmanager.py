@@ -3,9 +3,9 @@ import sys
 import types
 
 import pytest
+from _pytest.config import ExitCode
 from _pytest.config import PytestPluginManager
 from _pytest.config.exceptions import UsageError
-from _pytest.main import ExitCode
 from _pytest.main import Session
 
 
@@ -71,7 +71,7 @@ class TestPytestPluginInteractions:
         values = []
 
         class A:
-            def pytest_configure(self, config):
+            def pytest_configure(self):
                 values.append(self)
 
         config.pluginmanager.register(A())
@@ -122,7 +122,7 @@ class TestPytestPluginInteractions:
     def test_hook_proxy(self, testdir):
         """Test the gethookproxy function(#2016)"""
         config = testdir.parseconfig()
-        session = Session(config)
+        session = Session.from_config(config)
         testdir.makepyfile(**{"tests/conftest.py": "", "tests/subdir/conftest.py": ""})
 
         conftest1 = testdir.tmpdir.join("tests/conftest.py")
@@ -134,6 +134,36 @@ class TestPytestPluginInteractions:
         config.pluginmanager._importconftest(conftest2)
         ihook_b = session.gethookproxy(testdir.tmpdir.join("tests"))
         assert ihook_a is not ihook_b
+
+    def test_hook_with_addoption(self, testdir):
+        """Test that hooks can be used in a call to pytest_addoption"""
+        testdir.makepyfile(
+            newhooks="""
+            import pytest
+            @pytest.hookspec(firstresult=True)
+            def pytest_default_value():
+                pass
+        """
+        )
+        testdir.makepyfile(
+            myplugin="""
+            import newhooks
+            def pytest_addhooks(pluginmanager):
+                pluginmanager.add_hookspecs(newhooks)
+            def pytest_addoption(parser, pluginmanager):
+                default_value = pluginmanager.hook.pytest_default_value()
+                parser.addoption("--config", help="Config, defaults to %(default)s", default=default_value)
+        """
+        )
+        testdir.makeconftest(
+            """
+            pytest_plugins=("myplugin",)
+            def pytest_default_value():
+                return "default_value"
+        """
+        )
+        res = testdir.runpytest("--help")
+        res.stdout.fnmatch_lines(["*--config=CONFIG*default_value*"])
 
 
 def test_default_markers(testdir):
@@ -226,7 +256,7 @@ class TestPytestPluginManager:
         )
         p.copy(p.dirpath("skipping2.py"))
         monkeypatch.setenv("PYTEST_PLUGINS", "skipping2")
-        result = testdir.runpytest("-rw", "-p", "skipping1", syspathinsert=True)
+        result = testdir.runpytest("-p", "skipping1", syspathinsert=True)
         assert result.ret == ExitCode.NO_TESTS_COLLECTED
         result.stdout.fnmatch_lines(
             ["*skipped plugin*skipping1*hello*", "*skipped plugin*skipping2*hello*"]

@@ -4,7 +4,7 @@ import textwrap
 
 import _pytest._code
 import pytest
-from _pytest.main import ExitCode
+from _pytest.config import ExitCode
 from _pytest.nodes import Collector
 
 
@@ -68,7 +68,7 @@ class TestModule:
     def test_invalid_test_module_name(self, testdir):
         a = testdir.mkdir("a")
         a.ensure("test_one.part1.py")
-        result = testdir.runpytest("-rw")
+        result = testdir.runpytest()
         result.stdout.fnmatch_lines(
             [
                 "ImportError while importing test module*test_one.part1*",
@@ -137,7 +137,7 @@ class TestClass:
                     pass
         """
         )
-        result = testdir.runpytest("-rw")
+        result = testdir.runpytest()
         result.stdout.fnmatch_lines(
             [
                 "*cannot collect test class 'TestClass1' because it has "
@@ -153,7 +153,7 @@ class TestClass:
                     pass
         """
         )
-        result = testdir.runpytest("-rw")
+        result = testdir.runpytest()
         result.stdout.fnmatch_lines(
             [
                 "*cannot collect test class 'TestClass1' because it has "
@@ -230,7 +230,7 @@ class TestClass:
             TestCase = collections.namedtuple('TestCase', ['a'])
         """
         )
-        result = testdir.runpytest("-rw")
+        result = testdir.runpytest()
         result.stdout.fnmatch_lines(
             "*cannot collect test class 'TestCase' "
             "because it has a __new__ constructor*"
@@ -281,12 +281,12 @@ class TestFunction:
         from _pytest.fixtures import FixtureManager
 
         config = testdir.parseconfigure()
-        session = testdir.Session(config)
+        session = testdir.Session.from_config(config)
         session._fixturemanager = FixtureManager(session)
 
-        return pytest.Function(config=config, parent=session, **kwargs)
+        return pytest.Function.from_parent(parent=session, **kwargs)
 
-    def test_function_equality(self, testdir, tmpdir):
+    def test_function_equality(self, testdir):
         def func1():
             pass
 
@@ -463,7 +463,7 @@ class TestFunction:
                return '3'
 
             @pytest.mark.parametrize('fix2', ['2'])
-            def test_it(fix1):
+            def test_it(fix1, fix2):
                assert fix1 == '21'
                assert not fix3_instantiated
         """
@@ -492,7 +492,20 @@ class TestFunction:
         )
         assert "foo" in keywords[1] and "bar" in keywords[1] and "baz" in keywords[1]
 
-    def test_function_equality_with_callspec(self, testdir, tmpdir):
+    def test_parametrize_with_empty_string_arguments(self, testdir):
+        items = testdir.getitems(
+            """\
+            import pytest
+
+            @pytest.mark.parametrize('v', ('', ' '))
+            @pytest.mark.parametrize('w', ('', ' '))
+            def test(v, w): ...
+            """
+        )
+        names = {item.name for item in items}
+        assert names == {"test[-]", "test[ -]", "test[- ]", "test[ - ]"}
+
+    def test_function_equality_with_callspec(self, testdir):
         items = testdir.getitems(
             """
             import pytest
@@ -509,11 +522,11 @@ class TestFunction:
         config = item.config
 
         class MyPlugin1:
-            def pytest_pyfunc_call(self, pyfuncitem):
+            def pytest_pyfunc_call(self):
                 raise ValueError
 
         class MyPlugin2:
-            def pytest_pyfunc_call(self, pyfuncitem):
+            def pytest_pyfunc_call(self):
                 return True
 
         config.pluginmanager.register(MyPlugin1())
@@ -891,6 +904,8 @@ class TestTracebackCutting:
             pytest.skip("xxx")
         assert excinfo.traceback[-1].frame.code.name == "skip"
         assert excinfo.traceback[-1].ishidden()
+        assert excinfo.traceback[-2].frame.code.name == "test_skip_simple"
+        assert not excinfo.traceback[-2].ishidden()
 
     def test_traceback_argsetup(self, testdir):
         testdir.makeconftest(
@@ -1015,7 +1030,7 @@ class TestTracebackCutting:
 
 
 class TestReportInfo:
-    def test_itemreport_reportinfo(self, testdir, linecomp):
+    def test_itemreport_reportinfo(self, testdir):
         testdir.makeconftest(
             """
             import pytest
@@ -1024,7 +1039,7 @@ class TestReportInfo:
                     return "ABCDE", 42, "custom"
             def pytest_pycollect_makeitem(collector, name, obj):
                 if name == "test_func":
-                    return MyFunction(name, parent=collector)
+                    return MyFunction.from_parent(name=name, parent=collector)
         """
         )
         item = testdir.getitem("def test_func(): pass")
@@ -1139,7 +1154,7 @@ def test_unorderable_types(testdir):
     """
     )
     result = testdir.runpytest()
-    assert "TypeError" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*TypeError*")
     assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
 
@@ -1148,7 +1163,7 @@ def test_dont_collect_non_function_callable(testdir):
     """Test for issue https://github.com/pytest-dev/pytest/issues/331
 
     In this case an INTERNALERROR occurred trying to report the failure of
-    a test like this one because py test failed to get the source lines.
+    a test like this one because pytest failed to get the source lines.
     """
     testdir.makepyfile(
         """
@@ -1162,12 +1177,12 @@ def test_dont_collect_non_function_callable(testdir):
             pass
     """
     )
-    result = testdir.runpytest("-rw")
+    result = testdir.runpytest()
     result.stdout.fnmatch_lines(
         [
             "*collected 1 item*",
             "*test_dont_collect_non_function_callable.py:2: *cannot collect 'test_a' because it is not a function*",
-            "*1 passed, 1 warnings in *",
+            "*1 passed, 1 warning in *",
         ]
     )
 
@@ -1208,6 +1223,28 @@ def test_syntax_error_with_non_ascii_chars(testdir):
     testdir.makepyfile("☃")
     result = testdir.runpytest()
     result.stdout.fnmatch_lines(["*ERROR collecting*", "*SyntaxError*", "*1 error in*"])
+
+
+def test_collecterror_with_fulltrace(testdir):
+    testdir.makepyfile("assert 0")
+    result = testdir.runpytest("--fulltrace")
+    result.stdout.fnmatch_lines(
+        [
+            "collected 0 items / 1 error",
+            "",
+            "*= ERRORS =*",
+            "*_ ERROR collecting test_collecterror_with_fulltrace.py _*",
+            "",
+            "*/_pytest/python.py:*: ",
+            "_ _ _ _ _ _ _ _ *",
+            "",
+            ">   assert 0",
+            "E   assert 0",
+            "",
+            "test_collecterror_with_fulltrace.py:1: AssertionError",
+            "*! Interrupted: 1 error during collection !*",
+        ]
+    )
 
 
 def test_skip_duplicates_by_default(testdir):

@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 from _pytest._code.code import ExceptionChainRepr
 from _pytest.pathlib import Path
@@ -133,17 +135,17 @@ class TestReportSerialization:
         """
         reprec = testdir.inline_runsource(
             """
-            import py
+            import pytest
             def test_pass(): pass
             def test_fail(): 0/0
-            @py.test.mark.skipif("True")
+            @pytest.mark.skipif("True")
             def test_skip(): pass
             def test_skip_imperative():
-                py.test.skip("hello")
-            @py.test.mark.xfail("True")
+                pytest.skip("hello")
+            @pytest.mark.xfail("True")
             def test_xfail(): 0/0
             def test_xfail_imperative():
-                py.test.xfail("hello")
+                pytest.xfail("hello")
         """
         )
         reports = reprec.getreports("pytest_runtest_logreport")
@@ -305,11 +307,93 @@ class TestReportSerialization:
 
         data = report._to_json()
         loaded_report = report_class._from_json(data)
+
+        assert loaded_report.failed
         check_longrepr(loaded_report.longrepr)
 
         # make sure we don't blow up on ``toterminal`` call; we don't test the actual output because it is very
         # brittle and hard to maintain, but we can assume it is correct because ``toterminal`` is already tested
         # elsewhere and we do check the contents of the longrepr object after loading it.
+        loaded_report.longrepr.toterminal(tw_mock)
+
+    def test_chained_exceptions_no_reprcrash(self, testdir, tw_mock):
+        """Regression test for tracebacks without a reprcrash (#5971)
+
+        This happens notably on exceptions raised by multiprocess.pool: the exception transfer
+        from subprocess to main process creates an artificial exception, which ExceptionInfo
+        can't obtain the ReprFileLocation from.
+        """
+        # somehow in Python 3.5 on Windows this test fails with:
+        #   File "c:\...\3.5.4\x64\Lib\multiprocessing\connection.py", line 302, in _recv_bytes
+        #     overlapped=True)
+        # OSError: [WinError 6] The handle is invalid
+        #
+        # so in this platform we opted to use a mock traceback which is identical to the
+        # one produced by the multiprocessing module
+        if sys.version_info[:2] <= (3, 5) and sys.platform.startswith("win"):
+            testdir.makepyfile(
+                """
+                # equivalent of multiprocessing.pool.RemoteTraceback
+                class RemoteTraceback(Exception):
+                    def __init__(self, tb):
+                        self.tb = tb
+                    def __str__(self):
+                        return self.tb
+                def test_a():
+                    try:
+                        raise ValueError('value error')
+                    except ValueError as e:
+                        # equivalent to how multiprocessing.pool.rebuild_exc does it
+                        e.__cause__ = RemoteTraceback('runtime error')
+                        raise e
+            """
+            )
+        else:
+            testdir.makepyfile(
+                """
+                from concurrent.futures import ProcessPoolExecutor
+
+                def func():
+                    raise ValueError('value error')
+
+                def test_a():
+                    with ProcessPoolExecutor() as p:
+                        p.submit(func).result()
+            """
+            )
+
+        testdir.syspathinsert()
+        reprec = testdir.inline_run()
+
+        reports = reprec.getreports("pytest_runtest_logreport")
+
+        def check_longrepr(longrepr):
+            assert isinstance(longrepr, ExceptionChainRepr)
+            assert len(longrepr.chain) == 2
+            entry1, entry2 = longrepr.chain
+            tb1, fileloc1, desc1 = entry1
+            tb2, fileloc2, desc2 = entry2
+
+            assert "RemoteTraceback" in str(tb1)
+            assert "ValueError: value error" in str(tb2)
+
+            assert fileloc1 is None
+            assert fileloc2.message == "ValueError: value error"
+
+        # 3 reports: setup/call/teardown: get the call report
+        assert len(reports) == 3
+        report = reports[1]
+
+        assert report.failed
+        check_longrepr(report.longrepr)
+
+        data = report._to_json()
+        loaded_report = TestReport._from_json(data)
+
+        assert loaded_report.failed
+        check_longrepr(loaded_report.longrepr)
+
+        # for same reasons as previous test, ensure we don't blow up here
         loaded_report.longrepr.toterminal(tw_mock)
 
 
@@ -330,7 +414,7 @@ class TestHooks:
             data = pytestconfig.hook.pytest_report_to_serializable(
                 config=pytestconfig, report=rep
             )
-            assert data["_report_type"] == "TestReport"
+            assert data["$report_type"] == "TestReport"
             new_rep = pytestconfig.hook.pytest_report_from_serializable(
                 config=pytestconfig, data=data
             )
@@ -352,7 +436,7 @@ class TestHooks:
             data = pytestconfig.hook.pytest_report_to_serializable(
                 config=pytestconfig, report=rep
             )
-            assert data["_report_type"] == "CollectReport"
+            assert data["$report_type"] == "CollectReport"
             new_rep = pytestconfig.hook.pytest_report_from_serializable(
                 config=pytestconfig, data=data
             )
@@ -376,7 +460,7 @@ class TestHooks:
         data = pytestconfig.hook.pytest_report_to_serializable(
             config=pytestconfig, report=rep
         )
-        data["_report_type"] = "Unknown"
+        data["$report_type"] = "Unknown"
         with pytest.raises(AssertionError):
             _ = pytestconfig.hook.pytest_report_from_serializable(
                 config=pytestconfig, data=data

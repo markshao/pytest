@@ -2,10 +2,12 @@
 import bdb
 import os
 import sys
-from time import time
+from time import perf_counter  # Intentionally not `import time` to avoid being
+from time import time  # affected by tests which monkeypatch `time` (issue #185).
 from typing import Callable
 from typing import Dict
 from typing import List
+from typing import Optional
 from typing import Tuple
 
 import attr
@@ -13,14 +15,18 @@ import attr
 from .reports import CollectErrorRepr
 from .reports import CollectReport
 from .reports import TestReport
+from _pytest._code.code import ExceptionChainRepr
 from _pytest._code.code import ExceptionInfo
+from _pytest.compat import TYPE_CHECKING
+from _pytest.nodes import Collector
 from _pytest.nodes import Node
 from _pytest.outcomes import Exit
 from _pytest.outcomes import Skipped
 from _pytest.outcomes import TEST_OUTCOME
 
-if False:  # TYPE_CHECKING
+if TYPE_CHECKING:
     from typing import Type
+    from typing_extensions import Literal
 
 #
 # pytest plugin hooks
@@ -35,7 +41,7 @@ def pytest_addoption(parser):
         default=None,
         metavar="N",
         help="show N slowest setup/test durations (N=0 for all).",
-    ),
+    )
 
 
 def pytest_terminal_summary(terminalreporter):
@@ -54,15 +60,18 @@ def pytest_terminal_summary(terminalreporter):
     dlist.sort(key=lambda x: x.duration)
     dlist.reverse()
     if not durations:
-        tr.write_sep("=", "slowest test durations")
+        tr.write_sep("=", "slowest durations")
     else:
-        tr.write_sep("=", "slowest %s test durations" % durations)
+        tr.write_sep("=", "slowest %s durations" % durations)
         dlist = dlist[:durations]
 
-    for rep in dlist:
+    for i, rep in enumerate(dlist):
         if verbose < 2 and rep.duration < 0.005:
             tr.write_line("")
-            tr.write_line("(0.00 durations hidden.  Use -vv to show these durations.)")
+            tr.write_line(
+                "(%s durations < 0.005s hidden.  Use -vv to show these durations.)"
+                % (len(dlist) - i)
+            )
             break
         tr.write_line("{:02.2f}s {:<8} {}".format(rep.duration, rep.when, rep.nodeid))
 
@@ -120,19 +129,22 @@ def pytest_runtest_setup(item):
 
 def pytest_runtest_call(item):
     _update_current_test_var(item, "call")
-    sys.last_type, sys.last_value, sys.last_traceback = (None, None, None)
+    try:
+        del sys.last_type
+        del sys.last_value
+        del sys.last_traceback
+    except AttributeError:
+        pass
     try:
         item.runtest()
-    except Exception:
+    except Exception as e:
         # Store trace info to allow postmortem debugging
-        type, value, tb = sys.exc_info()
-        assert tb is not None
-        tb = tb.tb_next  # Skip *this* frame
-        sys.last_type = type
-        sys.last_value = value
-        sys.last_traceback = tb
-        del type, value, tb  # Get rid of these in this frame
-        raise
+        sys.last_type = type(e)
+        sys.last_value = e
+        assert e.__traceback__ is not None
+        # Skip *this* frame
+        sys.last_traceback = e.__traceback__.tb_next
+        raise e
 
 
 def pytest_runtest_teardown(item, nextitem):
@@ -143,9 +155,9 @@ def pytest_runtest_teardown(item, nextitem):
 
 def _update_current_test_var(item, when):
     """
-    Update PYTEST_CURRENT_TEST to reflect the current item and stage.
+    Update :envvar:`PYTEST_CURRENT_TEST` to reflect the current item and stage.
 
-    If ``when`` is None, delete PYTEST_CURRENT_TEST from the environment.
+    If ``when`` is None, delete ``PYTEST_CURRENT_TEST`` from the environment.
     """
     var_name = "PYTEST_CURRENT_TEST"
     if when:
@@ -172,7 +184,9 @@ def pytest_report_teststatus(report):
 # Implementation
 
 
-def call_and_report(item, when, log=True, **kwds):
+def call_and_report(
+    item, when: "Literal['setup', 'call', 'teardown']", log=True, **kwds
+):
     call = call_runtest_hook(item, when, **kwds)
     hook = item.ihook
     report = hook.pytest_runtest_makereport(item=item, call=call)
@@ -191,9 +205,15 @@ def check_interactive_exception(call, report):
     )
 
 
-def call_runtest_hook(item, when, **kwds):
-    hookname = "pytest_runtest_" + when
-    ihook = getattr(item.ihook, hookname)
+def call_runtest_hook(item, when: "Literal['setup', 'call', 'teardown']", **kwds):
+    if when == "setup":
+        ihook = item.ihook.pytest_runtest_setup
+    elif when == "call":
+        ihook = item.ihook.pytest_runtest_call
+    elif when == "teardown":
+        ihook = item.ihook.pytest_runtest_teardown
+    else:
+        assert False, "Unhandled runtest hook case: {}".format(when)
     reraise = (Exit,)  # type: Tuple[Type[BaseException], ...]
     if not item.config.getoption("usepdb", False):
         reraise += (KeyboardInterrupt,)
@@ -204,14 +224,23 @@ def call_runtest_hook(item, when, **kwds):
 
 @attr.s(repr=False)
 class CallInfo:
-    """ Result/Exception info a function invocation. """
+    """ Result/Exception info a function invocation.
+
+    :param result: The return value of the call, if it didn't raise. Can only be accessed
+        if excinfo is None.
+    :param Optional[ExceptionInfo] excinfo: The captured exception of the call, if it raised.
+    :param float start: The system time when the call started, in seconds since the epoch.
+    :param float stop: The system time when the call ended, in seconds since the epoch.
+    :param float duration: The call duration, in seconds.
+    :param str when: The context of invocation: "setup", "call", "teardown", ...
+    """
 
     _result = attr.ib()
-    # Optional[ExceptionInfo]
-    excinfo = attr.ib()
-    start = attr.ib()
-    stop = attr.ib()
-    when = attr.ib()
+    excinfo = attr.ib(type=Optional[ExceptionInfo])
+    start = attr.ib(type=float)
+    stop = attr.ib(type=float)
+    duration = attr.ib(type=float)
+    when = attr.ib(type=str)
 
     @property
     def result(self):
@@ -220,11 +249,12 @@ class CallInfo:
         return self._result
 
     @classmethod
-    def from_call(cls, func, when, reraise=None):
+    def from_call(cls, func, when, reraise=None) -> "CallInfo":
         #: context of invocation: one of "setup", "call",
         #: "teardown", "memocollect"
-        start = time()
         excinfo = None
+        start = time()
+        precise_start = perf_counter()
         try:
             result = func()
         except:  # noqa
@@ -232,27 +262,30 @@ class CallInfo:
             if reraise is not None and excinfo.errisinstance(reraise):
                 raise
             result = None
+        # use the perf counter
+        precise_stop = perf_counter()
+        duration = precise_stop - precise_start
         stop = time()
-        return cls(start=start, stop=stop, when=when, result=result, excinfo=excinfo)
+        return cls(
+            start=start,
+            stop=stop,
+            duration=duration,
+            when=when,
+            result=result,
+            excinfo=excinfo,
+        )
 
     def __repr__(self):
-        if self.excinfo is not None:
-            status = "exception"
-            value = self.excinfo.value
-        else:
-            # TODO: investigate unification
-            value = repr(self._result)
-            status = "result"
-        return "<CallInfo when={when!r} {status}: {value}>".format(
-            when=self.when, value=value, status=status
-        )
+        if self.excinfo is None:
+            return "<CallInfo when={!r} result: {!r}>".format(self.when, self._result)
+        return "<CallInfo when={!r} excinfo={!r}>".format(self.when, self.excinfo)
 
 
 def pytest_runtest_makereport(item, call):
     return TestReport.from_item_and_call(item, call)
 
 
-def pytest_make_collect_report(collector):
+def pytest_make_collect_report(collector: Collector) -> CollectReport:
     call = CallInfo.from_call(lambda: list(collector.collect()), "collect")
     longrepr = None
     if not call.excinfo:
@@ -265,7 +298,10 @@ def pytest_make_collect_report(collector):
             skip_exceptions.append(unittest.SkipTest)  # type: ignore
         if call.excinfo.errisinstance(tuple(skip_exceptions)):
             outcome = "skipped"
-            r = collector._repr_failure_py(call.excinfo, "line").reprcrash
+            r_ = collector._repr_failure_py(call.excinfo, "line")
+            assert isinstance(r_, ExceptionChainRepr), repr(r_)
+            r = r_.reprcrash
+            assert r
             longrepr = (str(r.path), r.lineno, r.message)
         else:
             outcome = "failed"
@@ -305,15 +341,13 @@ class SetupState:
             fin = finalizers.pop()
             try:
                 fin()
-            except TEST_OUTCOME:
+            except TEST_OUTCOME as e:
                 # XXX Only first exception will be seen by user,
                 #     ideally all should be reported.
                 if exc is None:
-                    exc = sys.exc_info()
+                    exc = e
         if exc:
-            _, val, tb = exc
-            assert val is not None
-            raise val.with_traceback(tb)
+            raise exc
 
     def _teardown_with_finalization(self, colitem):
         self._callfinalizers(colitem)
@@ -339,15 +373,13 @@ class SetupState:
                 break
             try:
                 self._pop_and_teardown()
-            except TEST_OUTCOME:
+            except TEST_OUTCOME as e:
                 # XXX Only first exception will be seen by user,
                 #     ideally all should be reported.
                 if exc is None:
-                    exc = sys.exc_info()
+                    exc = e
         if exc:
-            _, val, tb = exc
-            assert val is not None
-            raise val.with_traceback(tb)
+            raise exc
 
     def prepare(self, colitem):
         """ setup objects along the collector chain to the test-method
@@ -358,15 +390,15 @@ class SetupState:
         # check if the last collection node has raised an error
         for col in self.stack:
             if hasattr(col, "_prepare_exc"):
-                _, val, tb = col._prepare_exc
-                raise val.with_traceback(tb)
+                exc = col._prepare_exc
+                raise exc
         for col in needed_collectors[len(self.stack) :]:
             self.stack.append(col)
             try:
                 col.setup()
-            except TEST_OUTCOME:
-                col._prepare_exc = sys.exc_info()
-                raise
+            except TEST_OUTCOME as e:
+                col._prepare_exc = e
+                raise e
 
 
 def collect_one_node(collector):

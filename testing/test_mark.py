@@ -3,7 +3,7 @@ import sys
 from unittest import mock
 
 import pytest
-from _pytest.main import ExitCode
+from _pytest.config import ExitCode
 from _pytest.mark import EMPTY_PARAMETERSET_OPTION
 from _pytest.mark import MarkGenerator as Mark
 from _pytest.nodes import Collector
@@ -41,7 +41,7 @@ class TestMark:
             mark._some_name
 
 
-def test_marked_class_run_twice(testdir, request):
+def test_marked_class_run_twice(testdir):
     """Test fails file is run twice that contains marked class.
     See issue#683.
     """
@@ -314,6 +314,21 @@ def test_keyword_option_parametrize(spec, testdir):
     assert list(passed) == list(passed_result)
 
 
+def test_parametrize_with_module(testdir):
+    testdir.makepyfile(
+        """
+        import pytest
+        @pytest.mark.parametrize("arg", [pytest,])
+        def test_func(arg):
+            pass
+    """
+    )
+    rec = testdir.inline_run()
+    passed, skipped, fail = rec.listoutcomes()
+    expected_id = "test_func[" + pytest.__name__ + "]"
+    assert passed[0].nodeid.split("::")[-1] == expected_id
+
+
 @pytest.mark.parametrize(
     "spec",
     [
@@ -482,7 +497,7 @@ class TestFunctional:
         items, rec = testdir.inline_genitems(p)
         base_item, sub_item, sub_item_other = items
         print(items, [x.nodeid for x in items])
-        # new api seregates
+        # new api segregates
         assert not list(base_item.iter_markers(name="b"))
         assert not list(sub_item_other.iter_markers(name="b"))
         assert list(sub_item.iter_markers(name="b"))
@@ -518,10 +533,10 @@ class TestFunctional:
             @pytest.mark.c(location="class")
             class Test:
                 @pytest.mark.c(location="function")
-                def test_has_own():
+                def test_has_own(self):
                     pass
 
-                def test_has_inherited():
+                def test_has_inherited(self):
                     pass
 
         """
@@ -585,18 +600,6 @@ class TestFunctional:
         dlist = reprec.getcalls("pytest_deselected")
         deselected_tests = dlist[0].items
         assert len(deselected_tests) == 2
-
-    def test_invalid_m_option(self, testdir):
-        testdir.makepyfile(
-            """
-            def test_a():
-                pass
-        """
-        )
-        result = testdir.runpytest("-m bogus/")
-        result.stdout.fnmatch_lines(
-            ["INTERNALERROR> Marker expression must be valid Python!"]
-        )
 
     def test_keywords_at_node_level(self, testdir):
         testdir.makepyfile(
@@ -831,6 +834,12 @@ class TestMarkDecorator:
     def test__eq__(self, lhs, rhs, expected):
         assert (lhs == rhs) == expected
 
+    def test_aliases(self) -> None:
+        md = pytest.mark.foo(1, "2", three=3)
+        assert md.name == "foo"
+        assert md.args == (1, "2")
+        assert md.kwargs == {"three": 3}
+
 
 @pytest.mark.parametrize("mark", [None, "", "skip", "xfail"])
 def test_parameterset_for_parametrize_marks(testdir, mark):
@@ -891,7 +900,7 @@ def test_parameterset_for_fail_at_collect(testdir):
     result = testdir.runpytest(str(p1))
     result.stdout.fnmatch_lines(
         [
-            "collected 0 items / 1 errors",
+            "collected 0 items / 1 error",
             "* ERROR collecting test_parameterset_for_fail_at_collect.py *",
             "Empty parameter set in 'test' at line 3",
             "*= 1 error in *",
@@ -941,7 +950,11 @@ def test_mark_expressions_no_smear(testdir):
 
 
 def test_addmarker_order():
-    node = Node("Test", config=mock.Mock(), session=mock.Mock(), nodeid="Test")
+    session = mock.Mock()
+    session.own_markers = []
+    session.parent = None
+    session.nodeid = ""
+    node = Node.from_parent(session, name="Test")
     node.add_marker("foo")
     node.add_marker("bar")
     node.add_marker("baz", append=False)
@@ -990,10 +1003,27 @@ def test_markers_from_parametrize(testdir):
 def test_pytest_param_id_requires_string():
     with pytest.raises(TypeError) as excinfo:
         pytest.param(id=True)
-    msg, = excinfo.value.args
+    (msg,) = excinfo.value.args
     assert msg == "Expected id to be a string, got <class 'bool'>: True"
 
 
 @pytest.mark.parametrize("s", (None, "hello world"))
 def test_pytest_param_id_allows_none_or_string(s):
     assert pytest.param(id=s)
+
+
+@pytest.mark.parametrize("expr", ("NOT internal_err", "NOT (internal_err)", "bogus/"))
+def test_marker_expr_eval_failure_handling(testdir, expr):
+    foo = testdir.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.internal_err
+        def test_foo():
+            pass
+        """
+    )
+    expected = "ERROR: Wrong expression passed to '-m': {}".format(expr)
+    result = testdir.runpytest(foo, "-m", expr)
+    result.stderr.fnmatch_lines([expected])
+    assert result.ret == ExitCode.USAGE_ERROR

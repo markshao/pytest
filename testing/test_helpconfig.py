@@ -1,8 +1,9 @@
 import pytest
-from _pytest.main import ExitCode
+from _pytest.config import ExitCode
 
 
 def test_version(testdir, pytestconfig):
+    testdir.monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD")
     result = testdir.runpytest("--version")
     assert result.ret == 0
     # p = py.path.local(py.__file__).dirpath()
@@ -57,7 +58,7 @@ def test_traceconfig(testdir):
     result.stdout.fnmatch_lines(["*using*pytest*py*", "*active plugins*"])
 
 
-def test_debug(testdir, monkeypatch):
+def test_debug(testdir):
     result = testdir.runpytest_subprocess("--debug")
     assert result.ret == ExitCode.NO_TESTS_COLLECTED
     p = testdir.tmpdir.join("pytestdebug.log")

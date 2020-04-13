@@ -179,11 +179,12 @@ assertion failures.  This is provided by "assertion rewriting" which
 modifies the parsed AST before it gets compiled to bytecode.  This is
 done via a :pep:`302` import hook which gets installed early on when
 ``pytest`` starts up and will perform this rewriting when modules get
-imported.  However since we do not want to test different bytecode
-then you will run in production this hook only rewrites test modules
-themselves as well as any modules which are part of plugins.  Any
-other imported module will not be rewritten and normal assertion
-behaviour will happen.
+imported.  However, since we do not want to test different bytecode
+from what you will run in production, this hook only rewrites test modules
+themselves (as defined by the :confval:`python_files` configuration option),
+and any modules which are part of plugins.
+Any other imported module will not be rewritten and normal assertion behaviour
+will happen.
 
 If you have assertion helpers in other modules where you would need
 assertion rewriting to be enabled you need to ask ``pytest``
@@ -441,8 +442,13 @@ additionally it is possible to copy examples for an example folder before runnin
       $REGENDOC_TMPDIR/test_example.py:4: PytestExperimentalApiWarning: testdir.copy_example is an experimental api that may change over time
         testdir.copy_example("test_example.py")
 
+    test_example.py::test_plugin
+      $PYTHON_PREFIX/lib/python3.8/site-packages/_pytest/terminal.py:287: PytestDeprecationWarning: TerminalReporter.writer attribute is deprecated, use TerminalReporter._tw instead at your own risk.
+      See https://docs.pytest.org/en/latest/deprecations.html#terminalreporter-writer for more information.
+        warnings.warn(
+
     -- Docs: https://docs.pytest.org/en/latest/warnings.html
-    ====================== 2 passed, 1 warnings in 0.12s =======================
+    ====================== 2 passed, 2 warnings in 0.12s =======================
 
 For more information about the result object that ``runpytest()`` returns, and
 the methods that it provides please check out the :py:class:`RunResult
@@ -507,6 +513,7 @@ call only executes until the first of N registered functions returns a
 non-None result which is then taken as result of the overall hook call.
 The remaining hook functions will not be called in this case.
 
+.. _`hookwrapper`:
 
 hookwrapper: executing around other hooks
 -------------------------------------------------
@@ -551,8 +558,10 @@ perform tracing or other side effects around the actual hook implementations.
 If the result of the underlying hook is a mutable object, they may modify
 that result but it's probably better to avoid it.
 
-For more information, consult the `pluggy documentation <http://pluggy.readthedocs.io/en/latest/#wrappers>`_.
+For more information, consult the
+:ref:`pluggy documentation about hookwrappers <pluggy:hookwrappers>`.
 
+.. _plugin-hookorder:
 
 Hook function ordering / call example
 -------------------------------------
@@ -675,6 +684,56 @@ Example:
         Print all active hooks to the screen.
         """
         print(config.hook)
+
+
+.. _`addoptionhooks`:
+
+
+Using hooks in pytest_addoption
+-------------------------------
+
+Occasionally, it is necessary to change the way in which command line options
+are defined by one plugin based on hooks in another plugin. For example,
+a plugin may expose a command line option for which another plugin needs
+to define the default value. The pluginmanager can be used to install and
+use hooks to accomplish this. The plugin would define and add the hooks
+and use pytest_addoption as follows:
+
+.. code-block:: python
+
+   # contents of hooks.py
+
+   # Use firstresult=True because we only want one plugin to define this
+   # default value
+   @hookspec(firstresult=True)
+   def pytest_config_file_default_value():
+       """ Return the default value for the config file command line option. """
+
+
+   # contents of myplugin.py
+
+
+   def pytest_addhooks(pluginmanager):
+       """ This example assumes the hooks are grouped in the 'hooks' module. """
+       from . import hook
+
+       pluginmanager.add_hookspecs(hook)
+
+
+   def pytest_addoption(parser, pluginmanager):
+       default_value = pluginmanager.hook.pytest_config_file_default_value()
+       parser.addoption(
+           "--config-file",
+           help="Config file to use, defaults to %(default)s",
+           default=default_value,
+       )
+
+The conftest.py that is using myplugin would simply define the hook as follows:
+
+.. code-block:: python
+
+    def pytest_config_file_default_value():
+        return "config.yaml"
 
 
 Optionally using hooks from 3rd party plugins

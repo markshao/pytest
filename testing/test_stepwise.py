@@ -4,7 +4,7 @@ import pytest
 @pytest.fixture
 def stepwise_testdir(testdir):
     # Rather than having to modify our testfile between tests, we introduce
-    # a flag for wether or not the second test should fail.
+    # a flag for whether or not the second test should fail.
     testdir.makeconftest(
         """
 def pytest_addoption(parser):
@@ -164,14 +164,16 @@ def test_stop_on_collection_errors(broken_testdir, broken_first):
     if broken_first:
         files.reverse()
     result = broken_testdir.runpytest("-v", "--strict-markers", "--stepwise", *files)
-    result.stdout.fnmatch_lines("*errors during collection*")
+    result.stdout.fnmatch_lines("*error during collection*")
 
 
-def test_xfail_handling(testdir):
+def test_xfail_handling(testdir, monkeypatch):
     """Ensure normal xfail is ignored, and strict xfail interrupts the session in sw mode
 
     (#5547)
     """
+    monkeypatch.setattr("sys.dont_write_bytecode", True)
+
     contents = """
         import pytest
         def test_a(): pass
@@ -205,10 +207,6 @@ def test_xfail_handling(testdir):
         ]
     )
 
-    # because we are writing to the same file, mtime might not be affected enough to
-    # invalidate the cache, making this next run flaky
-    if testdir.tmpdir.join("__pycache__").exists():
-        testdir.tmpdir.join("__pycache__").remove()
     testdir.makepyfile(contents.format(assert_value="0", strict="True"))
     result = testdir.runpytest("--sw", "-v")
     result.stdout.fnmatch_lines(

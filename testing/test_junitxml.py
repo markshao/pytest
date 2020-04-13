@@ -1,15 +1,17 @@
 import os
 import platform
 from datetime import datetime
-from pathlib import Path
 from xml.dom import minidom
 
 import py
 import xmlschema
 
 import pytest
+from _pytest.junitxml import bin_xml_escape
 from _pytest.junitxml import LogXML
+from _pytest.pathlib import Path
 from _pytest.reports import BaseReport
+from _pytest.store import Store
 
 
 @pytest.fixture(scope="session")
@@ -445,7 +447,9 @@ class TestPython:
         fnode.assert_attr(message="internal error")
         assert "Division" in fnode.toxml()
 
-    @pytest.mark.parametrize("junit_logging", ["no", "system-out", "system-err"])
+    @pytest.mark.parametrize(
+        "junit_logging", ["no", "log", "system-out", "system-err", "out-err", "all"]
+    )
     @parametrize_families
     def test_failure_function(
         self, testdir, junit_logging, run_and_parse, xunit_family
@@ -467,32 +471,48 @@ class TestPython:
         result, dom = run_and_parse(
             "-o", "junit_logging=%s" % junit_logging, family=xunit_family
         )
-        assert result.ret
+        assert result.ret, "Expected ret > 0"
         node = dom.find_first_by_tag("testsuite")
         node.assert_attr(failures=1, tests=1)
         tnode = node.find_first_by_tag("testcase")
         tnode.assert_attr(classname="test_failure_function", name="test_fail")
         fnode = tnode.find_first_by_tag("failure")
         fnode.assert_attr(message="ValueError: 42")
-        assert "ValueError" in fnode.toxml()
-        systemout = fnode.next_sibling
-        assert systemout.tag == "system-out"
-        assert "hello-stdout" in systemout.toxml()
-        assert "info msg" not in systemout.toxml()
-        systemerr = systemout.next_sibling
-        assert systemerr.tag == "system-err"
-        assert "hello-stderr" in systemerr.toxml()
-        assert "info msg" not in systemerr.toxml()
+        assert "ValueError" in fnode.toxml(), "ValueError not included"
 
-        if junit_logging == "system-out":
-            assert "warning msg" in systemout.toxml()
-            assert "warning msg" not in systemerr.toxml()
-        elif junit_logging == "system-err":
-            assert "warning msg" not in systemout.toxml()
-            assert "warning msg" in systemerr.toxml()
-        elif junit_logging == "no":
-            assert "warning msg" not in systemout.toxml()
-            assert "warning msg" not in systemerr.toxml()
+        if junit_logging in ["log", "all"]:
+            logdata = tnode.find_first_by_tag("system-out")
+            log_xml = logdata.toxml()
+            assert logdata.tag == "system-out", "Expected tag: system-out"
+            assert "info msg" not in log_xml, "Unexpected INFO message"
+            assert "warning msg" in log_xml, "Missing WARN message"
+        if junit_logging in ["system-out", "out-err", "all"]:
+            systemout = tnode.find_first_by_tag("system-out")
+            systemout_xml = systemout.toxml()
+            assert systemout.tag == "system-out", "Expected tag: system-out"
+            assert "info msg" not in systemout_xml, "INFO message found in system-out"
+            assert (
+                "hello-stdout" in systemout_xml
+            ), "Missing 'hello-stdout' in system-out"
+        if junit_logging in ["system-err", "out-err", "all"]:
+            systemerr = tnode.find_first_by_tag("system-err")
+            systemerr_xml = systemerr.toxml()
+            assert systemerr.tag == "system-err", "Expected tag: system-err"
+            assert "info msg" not in systemerr_xml, "INFO message found in system-err"
+            assert (
+                "hello-stderr" in systemerr_xml
+            ), "Missing 'hello-stderr' in system-err"
+            assert (
+                "warning msg" not in systemerr_xml
+            ), "WARN message found in system-err"
+        if junit_logging == "no":
+            assert not tnode.find_by_tag("log"), "Found unexpected content: log"
+            assert not tnode.find_by_tag(
+                "system-out"
+            ), "Found unexpected content: system-out"
+            assert not tnode.find_by_tag(
+                "system-err"
+            ), "Found unexpected content: system-err"
 
     @parametrize_families
     def test_failure_verbose_message(self, testdir, run_and_parse, xunit_family):
@@ -520,7 +540,9 @@ class TestPython:
                 assert 0
         """
         )
-        result, dom = run_and_parse(family=xunit_family)
+        result, dom = run_and_parse(
+            "-o", "junit_logging=system-out", family=xunit_family
+        )
         assert result.ret
         node = dom.find_first_by_tag("testsuite")
         node.assert_attr(failures=3, tests=3)
@@ -533,7 +555,7 @@ class TestPython:
             )
             sysout = tnode.find_first_by_tag("system-out")
             text = sysout.text
-            assert text == "%s\n" % char
+            assert "%s\n" % char in text
 
     @parametrize_families
     def test_junit_prefixing(self, testdir, run_and_parse, xunit_family):
@@ -594,7 +616,10 @@ class TestPython:
         fnode = tnode.find_first_by_tag("skipped")
         fnode.assert_attr(type="pytest.xfail", message="42")
 
-    def test_xfail_captures_output_once(self, testdir, run_and_parse):
+    @pytest.mark.parametrize(
+        "junit_logging", ["no", "log", "system-out", "system-err", "out-err", "all"]
+    )
+    def test_xfail_captures_output_once(self, testdir, junit_logging, run_and_parse):
         testdir.makepyfile(
             """
             import sys
@@ -607,11 +632,18 @@ class TestPython:
                 assert 0
         """
         )
-        result, dom = run_and_parse()
+        result, dom = run_and_parse("-o", "junit_logging=%s" % junit_logging)
         node = dom.find_first_by_tag("testsuite")
         tnode = node.find_first_by_tag("testcase")
-        assert len(tnode.find_by_tag("system-err")) == 1
-        assert len(tnode.find_by_tag("system-out")) == 1
+        if junit_logging in ["system-err", "out-err", "all"]:
+            assert len(tnode.find_by_tag("system-err")) == 1
+        else:
+            assert len(tnode.find_by_tag("system-err")) == 0
+
+        if junit_logging in ["log", "system-out", "out-err", "all"]:
+            assert len(tnode.find_by_tag("system-out")) == 1
+        else:
+            assert len(tnode.find_by_tag("system-out")) == 0
 
     @parametrize_families
     def test_xfailure_xpass(self, testdir, run_and_parse, xunit_family):
@@ -693,20 +725,29 @@ class TestPython:
         result, dom = run_and_parse()
         print(dom.toxml())
 
-    def test_pass_captures_stdout(self, testdir, run_and_parse):
+    @pytest.mark.parametrize("junit_logging", ["no", "system-out"])
+    def test_pass_captures_stdout(self, testdir, run_and_parse, junit_logging):
         testdir.makepyfile(
             """
             def test_pass():
                 print('hello-stdout')
         """
         )
-        result, dom = run_and_parse()
+        result, dom = run_and_parse("-o", "junit_logging=%s" % junit_logging)
         node = dom.find_first_by_tag("testsuite")
         pnode = node.find_first_by_tag("testcase")
-        systemout = pnode.find_first_by_tag("system-out")
-        assert "hello-stdout" in systemout.toxml()
+        if junit_logging == "no":
+            assert not node.find_by_tag(
+                "system-out"
+            ), "system-out should not be generated"
+        if junit_logging == "system-out":
+            systemout = pnode.find_first_by_tag("system-out")
+            assert (
+                "hello-stdout" in systemout.toxml()
+            ), "'hello-stdout' should be in system-out"
 
-    def test_pass_captures_stderr(self, testdir, run_and_parse):
+    @pytest.mark.parametrize("junit_logging", ["no", "system-err"])
+    def test_pass_captures_stderr(self, testdir, run_and_parse, junit_logging):
         testdir.makepyfile(
             """
             import sys
@@ -714,13 +755,21 @@ class TestPython:
                 sys.stderr.write('hello-stderr')
         """
         )
-        result, dom = run_and_parse()
+        result, dom = run_and_parse("-o", "junit_logging=%s" % junit_logging)
         node = dom.find_first_by_tag("testsuite")
         pnode = node.find_first_by_tag("testcase")
-        systemout = pnode.find_first_by_tag("system-err")
-        assert "hello-stderr" in systemout.toxml()
+        if junit_logging == "no":
+            assert not node.find_by_tag(
+                "system-err"
+            ), "system-err should not be generated"
+        if junit_logging == "system-err":
+            systemerr = pnode.find_first_by_tag("system-err")
+            assert (
+                "hello-stderr" in systemerr.toxml()
+            ), "'hello-stderr' should be in system-err"
 
-    def test_setup_error_captures_stdout(self, testdir, run_and_parse):
+    @pytest.mark.parametrize("junit_logging", ["no", "system-out"])
+    def test_setup_error_captures_stdout(self, testdir, run_and_parse, junit_logging):
         testdir.makepyfile(
             """
             import pytest
@@ -733,13 +782,21 @@ class TestPython:
                 pass
         """
         )
-        result, dom = run_and_parse()
+        result, dom = run_and_parse("-o", "junit_logging=%s" % junit_logging)
         node = dom.find_first_by_tag("testsuite")
         pnode = node.find_first_by_tag("testcase")
-        systemout = pnode.find_first_by_tag("system-out")
-        assert "hello-stdout" in systemout.toxml()
+        if junit_logging == "no":
+            assert not node.find_by_tag(
+                "system-out"
+            ), "system-out should not be generated"
+        if junit_logging == "system-out":
+            systemout = pnode.find_first_by_tag("system-out")
+            assert (
+                "hello-stdout" in systemout.toxml()
+            ), "'hello-stdout' should be in system-out"
 
-    def test_setup_error_captures_stderr(self, testdir, run_and_parse):
+    @pytest.mark.parametrize("junit_logging", ["no", "system-err"])
+    def test_setup_error_captures_stderr(self, testdir, run_and_parse, junit_logging):
         testdir.makepyfile(
             """
             import sys
@@ -753,13 +810,21 @@ class TestPython:
                 pass
         """
         )
-        result, dom = run_and_parse()
+        result, dom = run_and_parse("-o", "junit_logging=%s" % junit_logging)
         node = dom.find_first_by_tag("testsuite")
         pnode = node.find_first_by_tag("testcase")
-        systemout = pnode.find_first_by_tag("system-err")
-        assert "hello-stderr" in systemout.toxml()
+        if junit_logging == "no":
+            assert not node.find_by_tag(
+                "system-err"
+            ), "system-err should not be generated"
+        if junit_logging == "system-err":
+            systemerr = pnode.find_first_by_tag("system-err")
+            assert (
+                "hello-stderr" in systemerr.toxml()
+            ), "'hello-stderr' should be in system-err"
 
-    def test_avoid_double_stdout(self, testdir, run_and_parse):
+    @pytest.mark.parametrize("junit_logging", ["no", "system-out"])
+    def test_avoid_double_stdout(self, testdir, run_and_parse, junit_logging):
         testdir.makepyfile(
             """
             import sys
@@ -774,12 +839,17 @@ class TestPython:
                 sys.stdout.write('hello-stdout call')
         """
         )
-        result, dom = run_and_parse()
+        result, dom = run_and_parse("-o", "junit_logging=%s" % junit_logging)
         node = dom.find_first_by_tag("testsuite")
         pnode = node.find_first_by_tag("testcase")
-        systemout = pnode.find_first_by_tag("system-out")
-        assert "hello-stdout call" in systemout.toxml()
-        assert "hello-stdout teardown" in systemout.toxml()
+        if junit_logging == "no":
+            assert not node.find_by_tag(
+                "system-out"
+            ), "system-out should not be generated"
+        if junit_logging == "system-out":
+            systemout = pnode.find_first_by_tag("system-out")
+            assert "hello-stdout call" in systemout.toxml()
+            assert "hello-stdout teardown" in systemout.toxml()
 
 
 def test_mangle_test_address():
@@ -797,6 +867,7 @@ def test_dont_configure_on_slaves(tmpdir):
         def __init__(self):
             self.pluginmanager = self
             self.option = self
+            self._store = Store()
 
         def getini(self, name):
             return "pytest"
@@ -847,7 +918,8 @@ class TestNonPython:
         assert "custom item runtest failed" in fnode.toxml()
 
 
-def test_nullbyte(testdir):
+@pytest.mark.parametrize("junit_logging", ["no", "system-out"])
+def test_nullbyte(testdir, junit_logging):
     # A null byte can not occur in XML (see section 2.2 of the spec)
     testdir.makepyfile(
         """
@@ -859,13 +931,17 @@ def test_nullbyte(testdir):
     """
     )
     xmlf = testdir.tmpdir.join("junit.xml")
-    testdir.runpytest("--junitxml=%s" % xmlf)
+    testdir.runpytest("--junitxml=%s" % xmlf, "-o", "junit_logging=%s" % junit_logging)
     text = xmlf.read()
     assert "\x00" not in text
-    assert "#x00" in text
+    if junit_logging == "system-out":
+        assert "#x00" in text
+    if junit_logging == "no":
+        assert "#x00" not in text
 
 
-def test_nullbyte_replace(testdir):
+@pytest.mark.parametrize("junit_logging", ["no", "system-out"])
+def test_nullbyte_replace(testdir, junit_logging):
     # Check if the null byte gets replaced
     testdir.makepyfile(
         """
@@ -877,9 +953,12 @@ def test_nullbyte_replace(testdir):
     """
     )
     xmlf = testdir.tmpdir.join("junit.xml")
-    testdir.runpytest("--junitxml=%s" % xmlf)
+    testdir.runpytest("--junitxml=%s" % xmlf, "-o", "junit_logging=%s" % junit_logging)
     text = xmlf.read()
-    assert "#x0" in text
+    if junit_logging == "system-out":
+        assert "#x0" in text
+    if junit_logging == "no":
+        assert "#x0" not in text
 
 
 def test_invalid_xml_escape():
@@ -891,11 +970,6 @@ def test_invalid_xml_escape():
     #     the higher ones.
     # XXX Testing 0xD (\r) is tricky as it overwrites the just written
     #     line in the output, so we skip it too.
-    global unichr
-    try:
-        unichr(65)
-    except NameError:
-        unichr = chr
     invalid = (
         0x00,
         0x1,
@@ -912,17 +986,15 @@ def test_invalid_xml_escape():
     valid = (0x9, 0xA, 0x20)
     # 0xD, 0xD7FF, 0xE000, 0xFFFD, 0x10000, 0x10FFFF)
 
-    from _pytest.junitxml import bin_xml_escape
-
     for i in invalid:
-        got = bin_xml_escape(unichr(i)).uniobj
+        got = bin_xml_escape(chr(i)).uniobj
         if i <= 0xFF:
             expected = "#x%02X" % i
         else:
             expected = "#x%04X" % i
         assert got == expected
     for i in valid:
-        assert chr(i) == bin_xml_escape(unichr(i)).uniobj
+        assert chr(i) == bin_xml_escape(chr(i)).uniobj
 
 
 def test_logxml_path_expansion(tmpdir, monkeypatch):
@@ -1058,13 +1130,14 @@ def test_record_property(testdir, run_and_parse):
             record_property("foo", "<1");
     """
     )
-    result, dom = run_and_parse("-rwv")
+    result, dom = run_and_parse()
     node = dom.find_first_by_tag("testsuite")
     tnode = node.find_first_by_tag("testcase")
     psnode = tnode.find_first_by_tag("properties")
     pnodes = psnode.find_by_tag("property")
     pnodes[0].assert_attr(name="bar", value="1")
     pnodes[1].assert_attr(name="foo", value="<1")
+    result.stdout.fnmatch_lines(["*= 1 passed in *"])
 
 
 def test_record_property_same_name(testdir, run_and_parse):
@@ -1075,7 +1148,7 @@ def test_record_property_same_name(testdir, run_and_parse):
             record_property("foo", "baz")
     """
     )
-    result, dom = run_and_parse("-rw")
+    result, dom = run_and_parse()
     node = dom.find_first_by_tag("testsuite")
     tnode = node.find_first_by_tag("testcase")
     psnode = tnode.find_first_by_tag("properties")
@@ -1117,7 +1190,7 @@ def test_record_attribute(testdir, run_and_parse):
             record_xml_attribute("foo", "<1");
     """
     )
-    result, dom = run_and_parse("-rw")
+    result, dom = run_and_parse()
     node = dom.find_first_by_tag("testsuite")
     tnode = node.find_first_by_tag("testcase")
     tnode.assert_attr(bar="1")
@@ -1152,7 +1225,7 @@ def test_record_fixtures_xunit2(testdir, fixture_name, run_and_parse):
         )
     )
 
-    result, dom = run_and_parse("-rw", family=None)
+    result, dom = run_and_parse(family=None)
     expected_lines = []
     if fixture_name == "record_xml_attribute":
         expected_lines.append(
@@ -1216,13 +1289,14 @@ def test_runs_twice(testdir, run_and_parse):
     )
 
     result, dom = run_and_parse(f, f)
-    assert "INTERNALERROR" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*INTERNALERROR*")
     first, second = [x["classname"] for x in dom.find_by_tag("testcase")]
     assert first == second
 
 
 def test_runs_twice_xdist(testdir, run_and_parse):
     pytest.importorskip("xdist")
+    testdir.monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD")
     f = testdir.makepyfile(
         """
         def test_pass():
@@ -1231,7 +1305,7 @@ def test_runs_twice_xdist(testdir, run_and_parse):
     )
 
     result, dom = run_and_parse(f, "--dist", "each", "--tx", "2*popen")
-    assert "INTERNALERROR" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*INTERNALERROR*")
     first, second = [x["classname"] for x in dom.find_by_tag("testcase")]
     assert first == second
 
@@ -1271,7 +1345,7 @@ def test_fancy_items_regression(testdir, run_and_parse):
 
     result, dom = run_and_parse()
 
-    assert "INTERNALERROR" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*INTERNALERROR*")
 
     items = sorted("%(classname)s %(name)s" % x for x in dom.find_by_tag("testcase"))
     import pprint
@@ -1474,3 +1548,45 @@ def test_logging_passing_tests_disabled_does_not_log_test_output(
     node = dom.find_first_by_tag("testcase")
     assert len(node.find_by_tag("system-err")) == 0
     assert len(node.find_by_tag("system-out")) == 0
+
+
+@parametrize_families
+@pytest.mark.parametrize("junit_logging", ["no", "system-out", "system-err"])
+def test_logging_passing_tests_disabled_logs_output_for_failing_test_issue5430(
+    testdir, junit_logging, run_and_parse, xunit_family
+):
+    testdir.makeini(
+        """
+        [pytest]
+        junit_log_passing_tests=False
+        junit_family={family}
+    """.format(
+            family=xunit_family
+        )
+    )
+    testdir.makepyfile(
+        """
+        import pytest
+        import logging
+        import sys
+
+        def test_func():
+            logging.warning('hello')
+            assert 0
+    """
+    )
+    result, dom = run_and_parse(
+        "-o", "junit_logging=%s" % junit_logging, family=xunit_family
+    )
+    assert result.ret == 1
+    node = dom.find_first_by_tag("testcase")
+    if junit_logging == "system-out":
+        assert len(node.find_by_tag("system-err")) == 0
+        assert len(node.find_by_tag("system-out")) == 1
+    elif junit_logging == "system-err":
+        assert len(node.find_by_tag("system-err")) == 1
+        assert len(node.find_by_tag("system-out")) == 0
+    else:
+        assert junit_logging == "no"
+        assert len(node.find_by_tag("system-err")) == 0
+        assert len(node.find_by_tag("system-out")) == 0

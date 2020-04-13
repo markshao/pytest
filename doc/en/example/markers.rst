@@ -148,6 +148,10 @@ which implements a substring match on the test names instead of the
 exact match on markers that ``-m`` provides.  This makes it easy to
 select tests based on their names:
 
+.. versionadded: 5.4
+
+The expression matching is now case-insensitive.
+
 .. code-block:: pytest
 
     $ pytest -v -k http  # running with the above defined example module
@@ -622,7 +626,7 @@ then you will see two tests skipped and two executed tests as expected:
     test_plat.py s.s.                                                    [100%]
 
     ========================= short test summary info ==========================
-    SKIPPED [2] $REGENDOC_TMPDIR/conftest.py:13: cannot run on platform linux
+    SKIPPED [2] $REGENDOC_TMPDIR/conftest.py:12: cannot run on platform linux
     ======================= 2 passed, 2 skipped in 0.12s =======================
 
 Note that if you specify a platform via the marker-command line option like this:
@@ -711,6 +715,9 @@ We can now use the ``-m option`` to select one set:
     test_module.py:8: in test_interface_complex
         assert 0
     E   assert 0
+    ========================= short test summary info ==========================
+    FAILED test_module.py::test_interface_simple - assert 0
+    FAILED test_module.py::test_interface_complex - assert 0
     ===================== 2 failed, 2 deselected in 0.12s ======================
 
 or to select both "event" and "interface" tests:
@@ -739,4 +746,8 @@ or to select both "event" and "interface" tests:
     test_module.py:12: in test_event_simple
         assert 0
     E   assert 0
+    ========================= short test summary info ==========================
+    FAILED test_module.py::test_interface_simple - assert 0
+    FAILED test_module.py::test_interface_complex - assert 0
+    FAILED test_module.py::test_event_simple - assert 0
     ===================== 3 failed, 1 deselected in 0.12s ======================

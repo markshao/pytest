@@ -2,7 +2,7 @@
 Contribution getting started
 ============================
 
-Contributions are highly welcomed and appreciated.  Every little help counts,
+Contributions are highly welcomed and appreciated.  Every little bit of help counts,
 so do not hesitate!
 
 .. contents::
@@ -51,7 +51,8 @@ Fix bugs
 
 Look through the `GitHub issues for bugs <https://github.com/pytest-dev/pytest/labels/type:%20bug>`_.
 
-:ref:`Talk <contact>` to developers to find out how you can fix specific bugs.
+:ref:`Talk <contact>` to developers to find out how you can fix specific bugs. To indicate that you are going
+to work on a particular issue, add a comment to that effect on the specific issue.
 
 Don't forget to check the issue trackers of your favourite plugins, too!
 
@@ -85,9 +86,8 @@ without using a local copy.  This can be convenient for small fixes.
 
         $ tox -e docs
 
-    The built documentation should be available in the ``doc/en/_build/``.
-
-    Where 'en' refers to the documentation language.
+    The built documentation should be available in ``doc/en/_build/html``,
+    where 'en' refers to the documentation language.
 
 .. _submitplugin:
 
@@ -129,7 +129,7 @@ the following:
 
 - an issue tracker for bug reports and enhancement requests.
 
-- a `changelog <http://keepachangelog.com/>`_
+- a `changelog <http://keepachangelog.com/>`_.
 
 If no contributor strongly objects and two agree, the repository can then be
 transferred to the ``pytest-dev`` organisation.
@@ -165,8 +165,6 @@ Short version
 
 #. Fork the repository.
 #. Enable and install `pre-commit <https://pre-commit.com>`_ to ensure style-guides and code checks are followed.
-#. Target ``master`` for bugfixes and doc changes.
-#. Target ``features`` for new features or functionality changes.
 #. Follow **PEP-8** for naming and `black <https://github.com/psf/black>`_ for formatting.
 #. Tests are run using ``tox``::
 
@@ -203,15 +201,11 @@ Here is a simple overview, with pytest-specific bits:
 
     $ git clone git@github.com:YOUR_GITHUB_USERNAME/pytest.git
     $ cd pytest
-    # now, to fix a bug create your own branch off "master":
+    # now, create your own branch off "master":
 
         $ git checkout -b your-bugfix-branch-name master
 
-    # or to instead add a feature create your own branch off "features":
-
-        $ git checkout -b your-feature-branch-name features
-
-   Given we have "major.minor.micro" version numbers, bugfixes will usually
+   Given we have "major.minor.micro" version numbers, bug fixes will usually
    be released in micro releases whereas features will be released in
    minor releases and incompatible changes in major releases.
 
@@ -262,6 +256,19 @@ Here is a simple overview, with pytest-specific bits:
 
    When committing, ``pre-commit`` will re-format the files if necessary.
 
+#. If instead of using ``tox`` you prefer to run the tests directly, then we suggest to create a virtual environment and use
+   an editable install with the ``testing`` extra::
+
+       $ python3 -m venv .venv
+       $ source .venv/bin/activate  # Linux
+       $ .venv/Scripts/activate.bat  # Windows
+       $ pip install -e ".[testing]"
+
+   Afterwards, you can edit the files and run pytest normally::
+
+       $ pytest testing/test_config.py
+
+
 #. Commit and push once your tests pass and you are happy with your change(s)::
 
     $ git commit -a -m "<commit message>"
@@ -280,8 +287,7 @@ Here is a simple overview, with pytest-specific bits:
     compare: your-branch-name
 
     base-fork: pytest-dev/pytest
-    base: master          # if it's a bugfix
-    base: features        # if it's a feature
+    base: master
 
 
 Writing Tests
@@ -331,7 +337,7 @@ Joining the Development Team
 Anyone who has successfully seen through a pull request which did not
 require any extra work from the development team to merge will
 themselves gain commit access if they so wish (if we forget to ask please send a friendly
-reminder).  This does not mean your workflow to contribute changes,
+reminder).  This does not mean there is any change in your contribution workflow:
 everyone goes through the same pull-request-and-review process and
 no-one merges their own pull requests unless already approved.  It does however mean you can
 participate in the development process more fully since you can merge

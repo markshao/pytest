@@ -23,9 +23,10 @@ from more_itertools.more import always_iterable
 import _pytest._code
 from _pytest.compat import overload
 from _pytest.compat import STRING_TYPES
+from _pytest.compat import TYPE_CHECKING
 from _pytest.outcomes import fail
 
-if False:  # TYPE_CHECKING
+if TYPE_CHECKING:
     from typing import Type  # noqa: F401 (used in type string)
 
 
@@ -223,26 +224,24 @@ class ApproxScalar(ApproxBase):
     def __repr__(self):
         """
         Return a string communicating both the expected value and the tolerance
-        for the comparison being made, e.g. '1.0 +- 1e-6'.  Use the unicode
-        plus/minus symbol if this is python3 (it's too hard to get right for
-        python2).
+        for the comparison being made, e.g. '1.0 ± 1e-6', '(3+4j) ± 5e-6 ∠ ±180°'.
         """
-        if isinstance(self.expected, complex):
-            return str(self.expected)
 
         # Infinities aren't compared using tolerances, so don't show a
-        # tolerance.
-        if math.isinf(self.expected):
+        # tolerance. Need to call abs to handle complex numbers, e.g. (inf + 1j)
+        if math.isinf(abs(self.expected)):
             return str(self.expected)
 
         # If a sensible tolerance can't be calculated, self.tolerance will
         # raise a ValueError.  In this case, display '???'.
         try:
             vetted_tolerance = "{:.1e}".format(self.tolerance)
+            if isinstance(self.expected, complex) and not math.isinf(self.tolerance):
+                vetted_tolerance += " ∠ ±180°"
         except ValueError:
             vetted_tolerance = "???"
 
-        return "{} \u00b1 {}".format(self.expected, vetted_tolerance)
+        return "{} ± {}".format(self.expected, vetted_tolerance)
 
     def __eq__(self, actual):
         """
@@ -554,22 +553,20 @@ def raises(
 
 
 @overload  # noqa: F811
-def raises(
+def raises(  # noqa: F811
     expected_exception: Union["Type[_E]", Tuple["Type[_E]", ...]],
     func: Callable,
     *args: Any,
-    match: Optional[str] = ...,
     **kwargs: Any
-) -> Optional[_pytest._code.ExceptionInfo[_E]]:
+) -> _pytest._code.ExceptionInfo[_E]:
     ...  # pragma: no cover
 
 
 def raises(  # noqa: F811
     expected_exception: Union["Type[_E]", Tuple["Type[_E]", ...]],
     *args: Any,
-    match: Optional[Union[str, "Pattern"]] = None,
     **kwargs: Any
-) -> Union["RaisesContext[_E]", Optional[_pytest._code.ExceptionInfo[_E]]]:
+) -> Union["RaisesContext[_E]", _pytest._code.ExceptionInfo[_E]]:
     r"""
     Assert that a code block/function call raises ``expected_exception``
     or raise a failure exception otherwise.
@@ -580,8 +577,12 @@ def raises(  # noqa: F811
         string that may contain `special characters`__, the pattern can
         first be escaped with ``re.escape``.
 
-        __ https://docs.python.org/3/library/re.html#regular-expression-syntax
+        (This is only used when ``pytest.raises`` is used as a context manager,
+        and passed through to the function otherwise.
+        When using ``pytest.raises`` as a function, you can use:
+        ``pytest.raises(Exc, func, match="passed on").match("my pattern")``.)
 
+        __ https://docs.python.org/3/library/re.html#regular-expression-syntax
 
     .. currentmodule:: _pytest._code
 
@@ -610,14 +611,6 @@ def raises(  # noqa: F811
         ...     raise ValueError("value must be 42")
         >>> assert exc_info.type is ValueError
         >>> assert exc_info.value.args[0] == "value must be 42"
-
-    .. deprecated:: 4.1
-
-        In the context manager form you may use the keyword argument
-        ``message`` to specify a custom failure message that will be displayed
-        in case the ``pytest.raises`` check fails. This has been deprecated as it
-        is considered error prone as users often mean to use ``match`` instead.
-        See :ref:`the deprecation docs <raises message deprecated>` for a workaround.
 
     .. note::
 
@@ -679,10 +672,9 @@ def raises(  # noqa: F811
         the exception --> current frame stack --> local variables -->
         ``ExceptionInfo``) which makes Python keep all objects referenced
         from that cycle (including all local variables in the current
-        frame) alive until the next cyclic garbage collection run. See the
-        official Python ``try`` statement documentation for more detailed
-        information.
-
+        frame) alive until the next cyclic garbage collection run.
+        More detailed information can be found in the official Python
+        documentation for :ref:`the try statement <python:try>`.
     """
     __tracebackhide__ = True
     for exc in filterfalse(
@@ -694,6 +686,7 @@ def raises(  # noqa: F811
     message = "DID NOT RAISE {}".format(expected_exception)
 
     if not args:
+        match = kwargs.pop("match", None)
         if kwargs:
             msg = "Unexpected keyword arguments passed to pytest.raises: "
             msg += ", ".join(sorted(kwargs))

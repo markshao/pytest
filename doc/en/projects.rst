@@ -38,7 +38,8 @@ Here are some examples of projects using ``pytest`` (please send notes via :ref:
 * `execnet <http://codespeak.net/execnet>`_ rapid multi-Python deployment
 * `pylib <https://pylib.readthedocs.io/en/stable/>`_ cross-platform path, IO, dynamic code library
 * `bbfreeze <https://pypi.org/project/bbfreeze/>`_ create standalone executables from Python scripts
-* `pdb++ <http://bitbucket.org/antocuni/pdb>`_ a fancier version of PDB
+* `pdb++ <https://github.com/pdbpp/pdbpp>`_ a fancier version of PDB
+* `pudb <https://github.com/inducer/pudb>`_ full-screen console debugger for python
 * `py-s3fuse <http://code.google.com/p/py-s3fuse/>`_ Amazon S3 FUSE based filesystem
 * `waskr <http://code.google.com/p/waskr/>`_ WSGI Stats Middleware
 * `guachi <http://code.google.com/p/guachi/>`_ global persistent configs for Python modules
@@ -71,8 +72,7 @@ Some organisations using pytest
 -----------------------------------
 
 * `Square Kilometre Array, Cape Town <http://ska.ac.za/>`_
-* `Some Mozilla QA people <http://www.theautomatedtester.co.uk/blog/2011/pytest_and_xdist_plugin.html>`_ use pytest to distribute their Selenium tests
-* `Tandberg <http://www.tandberg.com/>`_
+* `Some Mozilla QA people <https://www.theautomatedtester.co.uk/blog/2011/pytest_and_xdist_plugin/>`_ use pytest to distribute their Selenium tests
 * `Shootq <http://web.shootq.com/>`_
 * `Stups department of Heinrich Heine University Duesseldorf <http://www.stups.uni-duesseldorf.de/projects.php>`_
 * cellzome

@@ -49,30 +49,36 @@ def test_disabled(testdir):
     assert result.ret == 0
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-def test_timeout(testdir, enabled):
+@pytest.mark.parametrize(
+    "enabled",
+    [
+        pytest.param(
+            True, marks=pytest.mark.skip(reason="sometimes crashes on CI (#7022)")
+        ),
+        False,
+    ],
+)
+def test_timeout(testdir, enabled: bool) -> None:
     """Test option to dump tracebacks after a certain timeout.
     If faulthandler is disabled, no traceback will be dumped.
     """
     testdir.makepyfile(
         """
-    import time
+    import os, time
     def test_timeout():
-        time.sleep(2.0)
+        time.sleep(1 if "CI" in os.environ else 0.1)
     """
     )
     testdir.makeini(
         """
         [pytest]
-        faulthandler_timeout = 1
+        faulthandler_timeout = 0.01
         """
     )
     args = ["-p", "no:faulthandler"] if not enabled else []
 
     result = testdir.runpytest_subprocess(*args)
     tb_output = "most recent call first"
-    if sys.version_info[:2] == (3, 3):
-        tb_output = "Thread"
     if enabled:
         result.stderr.fnmatch_lines(["*%s*" % tb_output])
     else:
@@ -82,13 +88,13 @@ def test_timeout(testdir, enabled):
 
 
 @pytest.mark.parametrize("hook_name", ["pytest_enter_pdb", "pytest_exception_interact"])
-def test_cancel_timeout_on_hook(monkeypatch, pytestconfig, hook_name):
+def test_cancel_timeout_on_hook(monkeypatch, hook_name):
     """Make sure that we are cancelling any scheduled traceback dumping due
     to timeout before entering pdb (pytest-dev/pytest-faulthandler#12) or any other interactive
     exception (pytest-dev/pytest-faulthandler#14).
     """
     import faulthandler
-    from _pytest import faulthandler as plugin_module
+    from _pytest.faulthandler import FaultHandlerHooks
 
     called = []
 
@@ -98,6 +104,35 @@ def test_cancel_timeout_on_hook(monkeypatch, pytestconfig, hook_name):
 
     # call our hook explicitly, we can trust that pytest will call the hook
     # for us at the appropriate moment
-    hook_func = getattr(plugin_module, hook_name)
-    hook_func()
+    hook_func = getattr(FaultHandlerHooks, hook_name)
+    hook_func(self=None)
     assert called == [1]
+
+
+@pytest.mark.parametrize("faulthandler_timeout", [0, 2])
+def test_already_initialized(faulthandler_timeout, testdir):
+    """Test for faulthandler being initialized earlier than pytest (#6575)"""
+    testdir.makepyfile(
+        """
+        def test():
+            import faulthandler
+            assert faulthandler.is_enabled()
+    """
+    )
+    result = testdir.run(
+        sys.executable,
+        "-X",
+        "faulthandler",
+        "-mpytest",
+        testdir.tmpdir,
+        "-o",
+        "faulthandler_timeout={}".format(faulthandler_timeout),
+    )
+    # ensure warning is emitted if faulthandler_timeout is configured
+    warning_line = "*faulthandler.py*faulthandler module enabled before*"
+    if faulthandler_timeout > 0:
+        result.stdout.fnmatch_lines(warning_line)
+    else:
+        result.stdout.no_fnmatch_line(warning_line)
+    result.stdout.fnmatch_lines("*1 passed*")
+    assert result.ret == 0

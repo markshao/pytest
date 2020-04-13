@@ -20,6 +20,70 @@ Below is a complete list of all pytest features which are considered deprecated.
 :ref:`standard warning filters <warnings>`.
 
 
+``--no-print-logs`` command-line option
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 5.4
+
+
+Option ``--no-print-logs`` is deprecated and meant to be removed in a future release. If you use ``--no-print-logs``, please try out ``--show-capture`` and
+provide feedback.
+
+``--show-capture`` command-line option was added in ``pytest 3.5.0`` and allows to specify how to
+display captured output when tests fail: ``no``, ``stdout``, ``stderr``, ``log`` or ``all`` (the default).
+
+
+
+Node Construction changed to ``Node.from_parent``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 5.4
+
+The construction of nodes now should use the named constructor ``from_parent``.
+This limitation in api surface intends to enable better/simpler refactoring of the collection tree.
+
+This means that instead of :code:`MyItem(name="foo", parent=collector, obj=42)`
+one now has to invoke :code:`MyItem.from_parent(collector, name="foo")`.
+
+Plugins that wish to support older versions of pytest and suppress the warning can use
+`hasattr` to check if `from_parent` exists in that version:
+
+.. code-block:: python
+
+    def pytest_pycollect_makeitem(collector, name, obj):
+        if hasattr(MyItem, "from_parent"):
+            item = MyItem.from_parent(collector, name="foo")
+            item.obj = 42
+            return item
+        else:
+            return MyItem(name="foo", parent=collector, obj=42)
+
+Note that ``from_parent`` should only be called with keyword arguments for the parameters.
+
+
+
+``junit_family`` default value change to "xunit2"
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 5.2
+
+The default value of ``junit_family`` option will change to ``xunit2`` in pytest 6.0, given
+that this is the version supported by default in modern tools that manipulate this type of file.
+
+In order to smooth the transition, pytest will issue a warning in case the ``--junitxml`` option
+is given in the command line but ``junit_family`` is not explicitly configured in ``pytest.ini``::
+
+    PytestDeprecationWarning: The 'junit_family' default value will change to 'xunit2' in pytest 6.0.
+      Add 'junit_family=legacy' to your pytest.ini file to silence this warning and make your suite compatible.
+
+In order to silence this warning, users just need to configure the ``junit_family`` option explicitly:
+
+.. code-block:: ini
+
+    [pytest]
+    junit_family=legacy
+
+
 ``funcargnames`` alias for ``fixturenames``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -40,15 +104,27 @@ Result log (``--result-log``)
 .. deprecated:: 4.0
 
 The ``--result-log`` option produces a stream of test reports which can be
-analysed at runtime. It uses a custom format which requires users to implement their own
-parser, but the team believes using a line-based format that can be parsed using standard
-tools would provide a suitable and better alternative.
+analysed at runtime, but it uses a custom format which requires users to implement their own
+parser.
 
-The current plan is to provide an alternative in the pytest 5.0 series and remove the ``--result-log``
-option in pytest 6.0 after the new implementation proves satisfactory to all users and is deemed
-stable.
+The  `pytest-reportlog <https://github.com/pytest-dev/pytest-reportlog>`__ plugin provides a ``--report-log`` option, a more standard and extensible alternative, producing
+one JSON object per-line, and should cover the same use cases. Please try it out and provide feedback.
 
-The actual alternative is still being discussed in issue `#4488 <https://github.com/pytest-dev/pytest/issues/4488>`__.
+The plan is remove the ``--result-log`` option in pytest 6.0 if ``pytest-reportlog`` proves satisfactory
+to all users and is deemed stable. The ``pytest-reportlog`` plugin might even be merged into the core
+at some point, depending on the plans for the plugins and number of users using it.
+
+TerminalReporter.writer
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 5.4
+
+The ``TerminalReporter.writer`` attribute has been deprecated and should no longer be used. This
+was inadvertently exposed as part of the public API of that plugin and ties it too much
+with ``py.io.TerminalWriter``.
+
+Plugins that used ``TerminalReporter.writer`` directly should instead use ``TerminalReporter``
+methods that provide the same functionality.
 
 
 Removed Features

@@ -1,4 +1,5 @@
 """(disabled by default) support for testing pytest and pytest plugins."""
+import collections.abc
 import gc
 import importlib
 import os
@@ -8,21 +9,42 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Sequence
 from fnmatch import fnmatch
+from io import StringIO
+from typing import Callable
+from typing import Dict
+from typing import Iterable
+from typing import List
+from typing import Optional
+from typing import Sequence
+from typing import Tuple
+from typing import Union
 from weakref import WeakKeyDictionary
 
 import py
 
 import pytest
 from _pytest._code import Source
-from _pytest._io.saferepr import saferepr
 from _pytest.capture import MultiCapture
 from _pytest.capture import SysCapture
-from _pytest.main import ExitCode
+from _pytest.compat import TYPE_CHECKING
+from _pytest.config import _PluggyPlugin
+from _pytest.config import ExitCode
+from _pytest.fixtures import FixtureRequest
 from _pytest.main import Session
 from _pytest.monkeypatch import MonkeyPatch
+from _pytest.nodes import Collector
+from _pytest.nodes import Item
 from _pytest.pathlib import Path
+from _pytest.python import Module
+from _pytest.reports import TestReport
+from _pytest.tmpdir import TempdirFactory
+
+if TYPE_CHECKING:
+    from typing import Type
+
+    import pexpect
+
 
 IGNORE_PAM = [  # filenames added when obtaining details about the current user
     "/var/lib/sss/mc/passwd"
@@ -140,7 +162,7 @@ class LsofFdLeakChecker:
 
 
 @pytest.fixture
-def _pytest(request):
+def _pytest(request: FixtureRequest) -> "PytestArg":
     """Return a helper which offers a gethookrecorder(hook) method which
     returns a HookRecorder instance which helps to make assertions about called
     hooks.
@@ -150,10 +172,10 @@ def _pytest(request):
 
 
 class PytestArg:
-    def __init__(self, request):
+    def __init__(self, request: FixtureRequest) -> None:
         self.request = request
 
-    def gethookrecorder(self, hook):
+    def gethookrecorder(self, hook) -> "HookRecorder":
         hookrecorder = HookRecorder(hook._pm)
         self.request.addfinalizer(hookrecorder.finish_recording)
         return hookrecorder
@@ -174,6 +196,11 @@ class ParsedCall:
         del d["_name"]
         return "<ParsedCall {!r}(**{!r})>".format(self._name, d)
 
+    if TYPE_CHECKING:
+        # The class has undetermined attributes, this tells mypy about it.
+        def __getattr__(self, key):
+            raise NotImplementedError()
+
 
 class HookRecorder:
     """Record all hooks called in a plugin manager.
@@ -183,27 +210,27 @@ class HookRecorder:
 
     """
 
-    def __init__(self, pluginmanager):
+    def __init__(self, pluginmanager) -> None:
         self._pluginmanager = pluginmanager
-        self.calls = []
+        self.calls = []  # type: List[ParsedCall]
 
-        def before(hook_name, hook_impls, kwargs):
+        def before(hook_name: str, hook_impls, kwargs) -> None:
             self.calls.append(ParsedCall(hook_name, kwargs))
 
-        def after(outcome, hook_name, hook_impls, kwargs):
+        def after(outcome, hook_name: str, hook_impls, kwargs) -> None:
             pass
 
         self._undo_wrapping = pluginmanager.add_hookcall_monitoring(before, after)
 
-    def finish_recording(self):
+    def finish_recording(self) -> None:
         self._undo_wrapping()
 
-    def getcalls(self, names):
+    def getcalls(self, names: Union[str, Iterable[str]]) -> List[ParsedCall]:
         if isinstance(names, str):
             names = names.split()
         return [call for call in self.calls if call._name in names]
 
-    def assert_contains(self, entries):
+    def assert_contains(self, entries) -> None:
         __tracebackhide__ = True
         i = 0
         entries = list(entries)
@@ -224,7 +251,7 @@ class HookRecorder:
             else:
                 pytest.fail("could not find {!r} check {!r}".format(name, check))
 
-    def popcall(self, name):
+    def popcall(self, name: str) -> ParsedCall:
         __tracebackhide__ = True
         for i, call in enumerate(self.calls):
             if call._name == name:
@@ -234,20 +261,27 @@ class HookRecorder:
         lines.extend(["  %s" % x for x in self.calls])
         pytest.fail("\n".join(lines))
 
-    def getcall(self, name):
+    def getcall(self, name: str) -> ParsedCall:
         values = self.getcalls(name)
         assert len(values) == 1, (name, values)
         return values[0]
 
     # functionality for test reports
 
-    def getreports(self, names="pytest_runtest_logreport pytest_collectreport"):
+    def getreports(
+        self,
+        names: Union[
+            str, Iterable[str]
+        ] = "pytest_runtest_logreport pytest_collectreport",
+    ) -> List[TestReport]:
         return [x.report for x in self.getcalls(names)]
 
     def matchreport(
         self,
-        inamepart="",
-        names="pytest_runtest_logreport pytest_collectreport",
+        inamepart: str = "",
+        names: Union[
+            str, Iterable[str]
+        ] = "pytest_runtest_logreport pytest_collectreport",
         when=None,
     ):
         """return a testreport whose dotted import path matches"""
@@ -273,13 +307,20 @@ class HookRecorder:
             )
         return values[0]
 
-    def getfailures(self, names="pytest_runtest_logreport pytest_collectreport"):
+    def getfailures(
+        self,
+        names: Union[
+            str, Iterable[str]
+        ] = "pytest_runtest_logreport pytest_collectreport",
+    ) -> List[TestReport]:
         return [rep for rep in self.getreports(names) if rep.failed]
 
-    def getfailedcollections(self):
+    def getfailedcollections(self) -> List[TestReport]:
         return self.getfailures("pytest_collectreport")
 
-    def listoutcomes(self):
+    def listoutcomes(
+        self,
+    ) -> Tuple[List[TestReport], List[TestReport], List[TestReport]]:
         passed = []
         skipped = []
         failed = []
@@ -294,31 +335,38 @@ class HookRecorder:
                 failed.append(rep)
         return passed, skipped, failed
 
-    def countoutcomes(self):
+    def countoutcomes(self) -> List[int]:
         return [len(x) for x in self.listoutcomes()]
 
-    def assertoutcome(self, passed=0, skipped=0, failed=0):
-        realpassed, realskipped, realfailed = self.listoutcomes()
-        assert passed == len(realpassed)
-        assert skipped == len(realskipped)
-        assert failed == len(realfailed)
+    def assertoutcome(self, passed: int = 0, skipped: int = 0, failed: int = 0) -> None:
+        __tracebackhide__ = True
 
-    def clear(self):
+        outcomes = self.listoutcomes()
+        realpassed, realskipped, realfailed = outcomes
+        obtained = {
+            "passed": len(realpassed),
+            "skipped": len(realskipped),
+            "failed": len(realfailed),
+        }
+        expected = {"passed": passed, "skipped": skipped, "failed": failed}
+        assert obtained == expected, outcomes
+
+    def clear(self) -> None:
         self.calls[:] = []
 
 
 @pytest.fixture
-def linecomp(request):
+def linecomp() -> "LineComp":
     return LineComp()
 
 
 @pytest.fixture(name="LineMatcher")
-def LineMatcher_fixture(request):
+def LineMatcher_fixture(request: FixtureRequest) -> "Type[LineMatcher]":
     return LineMatcher
 
 
 @pytest.fixture
-def testdir(request, tmpdir_factory):
+def testdir(request: FixtureRequest, tmpdir_factory) -> "Testdir":
     return Testdir(request, tmpdir_factory)
 
 
@@ -347,35 +395,42 @@ rex_outcome = re.compile(r"(\d+) (\w+)")
 
 
 class RunResult:
-    """The result of running a command.
+    """The result of running a command."""
 
-    Attributes:
-
-    :ivar ret: the return value
-    :ivar outlines: list of lines captured from stdout
-    :ivar errlines: list of lines captured from stderr
-    :ivar stdout: :py:class:`LineMatcher` of stdout, use ``stdout.str()`` to
-       reconstruct stdout or the commonly used ``stdout.fnmatch_lines()``
-       method
-    :ivar stderr: :py:class:`LineMatcher` of stderr
-    :ivar duration: duration in seconds
-    """
-
-    def __init__(self, ret, outlines, errlines, duration):
-        self.ret = ret
+    def __init__(
+        self,
+        ret: Union[int, ExitCode],
+        outlines: List[str],
+        errlines: List[str],
+        duration: float,
+    ) -> None:
+        try:
+            self.ret = pytest.ExitCode(ret)  # type: Union[int, ExitCode]
+            """the return value"""
+        except ValueError:
+            self.ret = ret
         self.outlines = outlines
+        """list of lines captured from stdout"""
         self.errlines = errlines
+        """list of lines captured from stderr"""
         self.stdout = LineMatcher(outlines)
-        self.stderr = LineMatcher(errlines)
-        self.duration = duration
+        """:class:`LineMatcher` of stdout.
 
-    def __repr__(self):
+        Use e.g. :func:`stdout.str() <LineMatcher.str()>` to reconstruct stdout, or the commonly used
+        :func:`stdout.fnmatch_lines() <LineMatcher.fnmatch_lines()>` method.
+        """
+        self.stderr = LineMatcher(errlines)
+        """:class:`LineMatcher` of stderr"""
+        self.duration = duration
+        """duration in seconds"""
+
+    def __repr__(self) -> str:
         return (
-            "<RunResult ret=%r len(stdout.lines)=%d len(stderr.lines)=%d duration=%.2fs>"
+            "<RunResult ret=%s len(stdout.lines)=%d len(stderr.lines)=%d duration=%.2fs>"
             % (self.ret, len(self.stdout.lines), len(self.stderr.lines), self.duration)
         )
 
-    def parseoutcomes(self):
+    def parseoutcomes(self) -> Dict[str, int]:
         """Return a dictionary of outcomestring->num from parsing the terminal
         output that the test process produced.
 
@@ -383,17 +438,29 @@ class RunResult:
         for line in reversed(self.outlines):
             if rex_session_duration.search(line):
                 outcomes = rex_outcome.findall(line)
-                return {noun: int(count) for (count, noun) in outcomes}
-
-        raise ValueError("Pytest terminal summary report not found")
+                ret = {noun: int(count) for (count, noun) in outcomes}
+                break
+        else:
+            raise ValueError("Pytest terminal summary report not found")
+        if "errors" in ret:
+            assert "error" not in ret
+            ret["error"] = ret.pop("errors")
+        return ret
 
     def assert_outcomes(
-        self, passed=0, skipped=0, failed=0, error=0, xpassed=0, xfailed=0
-    ):
+        self,
+        passed: int = 0,
+        skipped: int = 0,
+        failed: int = 0,
+        error: int = 0,
+        xpassed: int = 0,
+        xfailed: int = 0,
+    ) -> None:
         """Assert that the specified outcomes appear with the respective
         numbers (0 means it didn't occur) in the text output from a test run.
-
         """
+        __tracebackhide__ = True
+
         d = self.parseoutcomes()
         obtained = {
             "passed": d.get("passed", 0),
@@ -415,19 +482,19 @@ class RunResult:
 
 
 class CwdSnapshot:
-    def __init__(self):
+    def __init__(self) -> None:
         self.__saved = os.getcwd()
 
-    def restore(self):
+    def restore(self) -> None:
         os.chdir(self.__saved)
 
 
 class SysModulesSnapshot:
-    def __init__(self, preserve=None):
+    def __init__(self, preserve: Optional[Callable[[str], bool]] = None):
         self.__preserve = preserve
         self.__saved = dict(sys.modules)
 
-    def restore(self):
+    def restore(self) -> None:
         if self.__preserve:
             self.__saved.update(
                 (k, m) for k, m in sys.modules.items() if self.__preserve(k)
@@ -437,10 +504,10 @@ class SysModulesSnapshot:
 
 
 class SysPathsSnapshot:
-    def __init__(self):
+    def __init__(self) -> None:
         self.__saved = list(sys.path), list(sys.meta_path)
 
-    def restore(self):
+    def restore(self) -> None:
         sys.path[:], sys.meta_path[:] = self.__saved
 
 
@@ -462,28 +529,32 @@ class Testdir:
 
     """
 
+    __test__ = False
+
     CLOSE_STDIN = object
 
     class TimeoutExpired(Exception):
         pass
 
-    def __init__(self, request, tmpdir_factory):
+    def __init__(self, request: FixtureRequest, tmpdir_factory: TempdirFactory) -> None:
         self.request = request
-        self._mod_collections = WeakKeyDictionary()
-        name = request.function.__name__
+        self._mod_collections = (
+            WeakKeyDictionary()
+        )  # type: WeakKeyDictionary[Module, List[Union[Item, Collector]]]
+        if request.function:
+            name = request.function.__name__  # type: str
+        else:
+            name = request.node.name
+        self._name = name
         self.tmpdir = tmpdir_factory.mktemp(name, numbered=True)
         self.test_tmproot = tmpdir_factory.mktemp("tmp-" + name, numbered=True)
-        self.plugins = []
+        self.plugins = []  # type: List[Union[str, _PluggyPlugin]]
         self._cwd_snapshot = CwdSnapshot()
         self._sys_path_snapshot = SysPathsSnapshot()
         self._sys_modules_snapshot = self.__take_sys_modules_snapshot()
         self.chdir()
         self.request.addfinalizer(self.finalize)
-        method = self.request.config.getoption("--runpytest")
-        if method == "inprocess":
-            self._runpytest_method = self.runpytest_inprocess
-        elif method == "subprocess":
-            self._runpytest_method = self.runpytest_subprocess
+        self._method = self.request.config.getoption("--runpytest")
 
         mp = self.monkeypatch = MonkeyPatch()
         mp.setenv("PYTEST_DEBUG_TEMPROOT", str(self.test_tmproot))
@@ -491,10 +562,12 @@ class Testdir:
         mp.delenv("TOX_ENV_DIR", raising=False)
         # Discard outer pytest options.
         mp.delenv("PYTEST_ADDOPTS", raising=False)
-
-        # Environment (updates) for inner runs.
+        # Ensure no user config is used.
         tmphome = str(self.tmpdir)
-        self._env_run_update = {"HOME": tmphome, "USERPROFILE": tmphome}
+        mp.setenv("HOME", tmphome)
+        mp.setenv("USERPROFILE", tmphome)
+        # Do not use colors for inner runs by default.
+        mp.setenv("PY_COLORS", "0")
 
     def __repr__(self):
         return "<Testdir {!r}>".format(self.tmpdir)
@@ -538,15 +611,15 @@ class Testdir:
         """
         self.tmpdir.chdir()
 
-    def _makefile(self, ext, args, kwargs, encoding="utf-8"):
-        items = list(kwargs.items())
+    def _makefile(self, ext, lines, files, encoding="utf-8"):
+        items = list(files.items())
 
         def to_text(s):
             return s.decode(encoding) if isinstance(s, bytes) else str(s)
 
-        if args:
-            source = "\n".join(to_text(x) for x in args)
-            basename = self.request.function.__name__
+        if lines:
+            source = "\n".join(to_text(x) for x in lines)
+            basename = self._name
             items.insert(0, (basename, source))
 
         ret = None
@@ -649,7 +722,7 @@ class Testdir:
             example_dir = example_dir.join(*extra_element.args)
 
         if name is None:
-            func_name = self.request.function.__name__
+            func_name = self._name
             maybe_dir = example_dir / func_name
             maybe_file = example_dir / (func_name + ".py")
 
@@ -690,7 +763,7 @@ class Testdir:
         :param arg: a :py:class:`py.path.local` instance of the file
 
         """
-        session = Session(config)
+        session = Session.from_config(config)
         assert "::" not in str(arg)
         p = py.path.local(arg)
         config.hook.pytest_sessionstart(session=session)
@@ -708,7 +781,7 @@ class Testdir:
 
         """
         config = self.parseconfigure(path)
-        session = Session(config)
+        session = Session.from_config(config)
         x = session.fspath.bestrelpath(path)
         config.hook.pytest_sessionstart(session=session)
         res = session.perform_collect([x], genitems=False)[0]
@@ -774,7 +847,7 @@ class Testdir:
         items = [x.item for x in rec.getcalls("pytest_itemcollected")]
         return items, rec
 
-    def inline_run(self, *args, plugins=(), no_reraise_ctrlc=False):
+    def inline_run(self, *args, plugins=(), no_reraise_ctrlc: bool = False):
         """Run ``pytest.main()`` in-process, returning a HookRecorder.
 
         Runs the :py:func:`pytest.main` function to run all of pytest inside
@@ -800,12 +873,6 @@ class Testdir:
         plugins = list(plugins)
         finalizers = []
         try:
-            # Do not load user config (during runs only).
-            mp_run = MonkeyPatch()
-            for k, v in self._env_run_update.items():
-                mp_run.setenv(k, v)
-            finalizers.append(mp_run.undo)
-
             # Any sys.module or sys.path changes done while running pytest
             # inline should be reverted after the test run completes to avoid
             # clashing with later inline tests run within the same pytest test,
@@ -831,7 +898,7 @@ class Testdir:
                 reprec = rec.pop()
             else:
 
-                class reprec:
+                class reprec:  # type: ignore
                     pass
 
             reprec.ret = ret
@@ -847,7 +914,7 @@ class Testdir:
             for finalizer in finalizers:
                 finalizer()
 
-    def runpytest_inprocess(self, *args, **kwargs):
+    def runpytest_inprocess(self, *args, **kwargs) -> RunResult:
         """Return result of running pytest in-process, providing a similar
         interface to what self.runpytest() provides.
         """
@@ -862,15 +929,20 @@ class Testdir:
             try:
                 reprec = self.inline_run(*args, **kwargs)
             except SystemExit as e:
+                ret = e.args[0]
+                try:
+                    ret = ExitCode(e.args[0])
+                except ValueError:
+                    pass
 
-                class reprec:
-                    ret = e.args[0]
+                class reprec:  # type: ignore
+                    ret = ret
 
             except Exception:
                 traceback.print_exc()
 
-                class reprec:
-                    ret = 3
+                class reprec:  # type: ignore
+                    ret = ExitCode(3)
 
         finally:
             out, err = capture.readouterr()
@@ -878,17 +950,23 @@ class Testdir:
             sys.stdout.write(out)
             sys.stderr.write(err)
 
-        res = RunResult(reprec.ret, out.split("\n"), err.split("\n"), time.time() - now)
-        res.reprec = reprec
+        res = RunResult(
+            reprec.ret, out.splitlines(), err.splitlines(), time.time() - now
+        )
+        res.reprec = reprec  # type: ignore
         return res
 
-    def runpytest(self, *args, **kwargs):
+    def runpytest(self, *args, **kwargs) -> RunResult:
         """Run pytest inline or in a subprocess, depending on the command line
         option "--runpytest" and return a :py:class:`RunResult`.
 
         """
         args = self._ensure_basetemp(args)
-        return self._runpytest_method(*args, **kwargs)
+        if self._method == "inprocess":
+            return self.runpytest_inprocess(*args, **kwargs)
+        elif self._method == "subprocess":
+            return self.runpytest_subprocess(*args, **kwargs)
+        raise RuntimeError("Unrecognized runpytest option: {}".format(self._method))
 
     def _ensure_basetemp(self, args):
         args = list(args)
@@ -927,11 +1005,9 @@ class Testdir:
 
         This returns a new :py:class:`_pytest.config.Config` instance like
         :py:meth:`parseconfig`, but also calls the pytest_configure hook.
-
         """
         config = self.parseconfig(*args)
         config._do_configure()
-        self.request.addfinalizer(config._ensure_unconfigure)
         return config
 
     def getitem(self, source, funcname="test_func"):
@@ -985,14 +1061,16 @@ class Testdir:
             path = self.tmpdir.join(str(source))
             assert not withinit, "not supported for paths"
         else:
-            kw = {self.request.function.__name__: Source(source).strip()}
+            kw = {self._name: Source(source).strip()}
             path = self.makepyfile(**kw)
         if withinit:
             self.makepyfile(__init__="#")
         self.config = config = self.parseconfigure(path, *configargs)
         return self.getnode(config, path)
 
-    def collect_by_name(self, modcol, name):
+    def collect_by_name(
+        self, modcol: Module, name: str
+    ) -> Optional[Union[Item, Collector]]:
         """Return the collection node for name from the module collection.
 
         This will search a module collection node for a collection node
@@ -1001,13 +1079,13 @@ class Testdir:
         :param modcol: a module collection node; see :py:meth:`getmodulecol`
 
         :param name: the name of the node to return
-
         """
         if modcol not in self._mod_collections:
             self._mod_collections[modcol] = list(modcol.collect())
         for colitem in self._mod_collections[modcol]:
             if colitem.name == name:
                 return colitem
+        return None
 
     def popen(
         self,
@@ -1029,7 +1107,6 @@ class Testdir:
         env["PYTHONPATH"] = os.pathsep.join(
             filter(None, [os.getcwd(), env.get("PYTHONPATH", "")])
         )
-        env.update(self._env_run_update)
         kw["env"] = env
 
         if stdin is Testdir.CLOSE_STDIN:
@@ -1047,7 +1124,7 @@ class Testdir:
 
         return popen
 
-    def run(self, *cmdargs, timeout=None, stdin=CLOSE_STDIN):
+    def run(self, *cmdargs, timeout=None, stdin=CLOSE_STDIN) -> RunResult:
         """Run a command with arguments.
 
         Run a process using subprocess.Popen saving the stdout and stderr.
@@ -1065,9 +1142,9 @@ class Testdir:
         """
         __tracebackhide__ = True
 
-        cmdargs = [
+        cmdargs = tuple(
             str(arg) if isinstance(arg, py.path.local) else arg for arg in cmdargs
-        ]
+        )
         p1 = self.tmpdir.join("stdout")
         p2 = self.tmpdir.join("stderr")
         print("running:", *cmdargs)
@@ -1118,6 +1195,10 @@ class Testdir:
             f2.close()
         self._dump_lines(out, sys.stdout)
         self._dump_lines(err, sys.stderr)
+        try:
+            ret = ExitCode(ret)
+        except ValueError:
+            pass
         return RunResult(ret, out, err, time.time() - now)
 
     def _dump_lines(self, lines, fp):
@@ -1130,7 +1211,7 @@ class Testdir:
     def _getpytestargs(self):
         return sys.executable, "-mpytest"
 
-    def runpython(self, script):
+    def runpython(self, script) -> RunResult:
         """Run a python script using sys.executable as interpreter.
 
         Returns a :py:class:`RunResult`.
@@ -1142,7 +1223,7 @@ class Testdir:
         """Run python -c "command", return a :py:class:`RunResult`."""
         return self.run(sys.executable, "-c", command)
 
-    def runpytest_subprocess(self, *args, timeout=None):
+    def runpytest_subprocess(self, *args, timeout=None) -> RunResult:
         """Run pytest as a subprocess with given arguments.
 
         Any plugins added to the :py:attr:`plugins` list will be added using the
@@ -1168,7 +1249,9 @@ class Testdir:
         args = self._getpytestargs() + args
         return self.run(*args, timeout=timeout)
 
-    def spawn_pytest(self, string, expect_timeout=10.0):
+    def spawn_pytest(
+        self, string: str, expect_timeout: float = 10.0
+    ) -> "pexpect.spawn":
         """Run pytest using pexpect.
 
         This makes sure to use the right pytest and sets up the temporary
@@ -1182,7 +1265,7 @@ class Testdir:
         cmd = "{} --basetemp={} {}".format(invoke, basetemp, string)
         return self.spawn(cmd, expect_timeout=expect_timeout)
 
-    def spawn(self, cmd, expect_timeout=10.0):
+    def spawn(self, cmd: str, expect_timeout: float = 10.0) -> "pexpect.spawn":
         """Run a command using pexpect.
 
         The pexpect child is returned.
@@ -1191,47 +1274,32 @@ class Testdir:
         pexpect = pytest.importorskip("pexpect", "3.0")
         if hasattr(sys, "pypy_version_info") and "64" in platform.machine():
             pytest.skip("pypy-64 bit not supported")
-        if sys.platform.startswith("freebsd"):
-            pytest.xfail("pexpect does not work reliably on freebsd")
         if not hasattr(pexpect, "spawn"):
             pytest.skip("pexpect.spawn not available")
         logfile = self.tmpdir.join("spawn.out").open("wb")
 
-        # Do not load user config.
-        env = os.environ.copy()
-        env.update(self._env_run_update)
-
-        child = pexpect.spawn(cmd, logfile=logfile, env=env)
+        child = pexpect.spawn(cmd, logfile=logfile)
         self.request.addfinalizer(logfile.close)
         child.timeout = expect_timeout
         return child
 
 
-def getdecoded(out):
-    try:
-        return out.decode("utf-8")
-    except UnicodeDecodeError:
-        return "INTERNAL not-utf8-decodeable, truncated string:\n{}".format(
-            saferepr(out)
-        )
-
-
 class LineComp:
-    def __init__(self):
-        self.stringio = py.io.TextIO()
+    def __init__(self) -> None:
+        self.stringio = StringIO()
+        """:class:`python:io.StringIO()` instance used for input."""
 
-    def assert_contains_lines(self, lines2):
-        """Assert that lines2 are contained (linearly) in lines1.
+    def assert_contains_lines(self, lines2: Sequence[str]) -> None:
+        """Assert that ``lines2`` are contained (linearly) in :attr:`stringio`'s value.
 
-        Return a list of extralines found.
-
+        Lines are matched using :func:`LineMatcher.fnmatch_lines`.
         """
         __tracebackhide__ = True
         val = self.stringio.getvalue()
         self.stringio.truncate(0)
         self.stringio.seek(0)
         lines1 = val.split("\n")
-        return LineMatcher(lines1).fnmatch_lines(lines2)
+        LineMatcher(lines1).fnmatch_lines(lines2)
 
 
 class LineMatcher:
@@ -1242,49 +1310,35 @@ class LineMatcher:
 
     The constructor takes a list of lines without their trailing newlines, i.e.
     ``text.splitlines()``.
-
     """
 
-    def __init__(self, lines):
+    def __init__(self, lines: List[str]) -> None:
         self.lines = lines
-        self._log_output = []
+        self._log_output = []  # type: List[str]
 
-    def str(self):
-        """Return the entire original text."""
-        return "\n".join(self.lines)
-
-    def _getlines(self, lines2):
+    def _getlines(self, lines2: Union[str, Sequence[str], Source]) -> Sequence[str]:
         if isinstance(lines2, str):
             lines2 = Source(lines2)
         if isinstance(lines2, Source):
             lines2 = lines2.strip().lines
         return lines2
 
-    def fnmatch_lines_random(self, lines2):
-        """Check lines exist in the output using in any order.
-
-        Lines are checked using ``fnmatch.fnmatch``. The argument is a list of
-        lines which have to occur in the output, in any order.
-
+    def fnmatch_lines_random(self, lines2: Sequence[str]) -> None:
+        """Check lines exist in the output in any order (using :func:`python:fnmatch.fnmatch`).
         """
+        __tracebackhide__ = True
         self._match_lines_random(lines2, fnmatch)
 
-    def re_match_lines_random(self, lines2):
-        """Check lines exist in the output using ``re.match``, in any order.
-
-        The argument is a list of lines which have to occur in the output, in
-        any order.
-
+    def re_match_lines_random(self, lines2: Sequence[str]) -> None:
+        """Check lines exist in the output in any order (using :func:`python:re.match`).
         """
-        self._match_lines_random(lines2, lambda name, pat: re.match(pat, name))
+        __tracebackhide__ = True
+        self._match_lines_random(lines2, lambda name, pat: bool(re.match(pat, name)))
 
-    def _match_lines_random(self, lines2, match_func):
-        """Check lines exist in the output.
-
-        The argument is a list of lines which have to occur in the output, in
-        any order.  Each line can contain glob whildcards.
-
-        """
+    def _match_lines_random(
+        self, lines2: Sequence[str], match_func: Callable[[str, str], bool]
+    ) -> None:
+        __tracebackhide__ = True
         lines2 = self._getlines(lines2)
         for line in lines2:
             for x in self.lines:
@@ -1292,51 +1346,71 @@ class LineMatcher:
                     self._log("matched: ", repr(line))
                     break
             else:
-                self._log("line %r not found in output" % line)
-                raise ValueError(self._log_text)
+                msg = "line %r not found in output" % line
+                self._log(msg)
+                self._fail(msg)
 
-    def get_lines_after(self, fnline):
+    def get_lines_after(self, fnline: str) -> Sequence[str]:
         """Return all lines following the given line in the text.
 
         The given line can contain glob wildcards.
-
         """
         for i, line in enumerate(self.lines):
             if fnline == line or fnmatch(line, fnline):
                 return self.lines[i + 1 :]
         raise ValueError("line %r not found in output" % fnline)
 
-    def _log(self, *args):
+    def _log(self, *args) -> None:
         self._log_output.append(" ".join(str(x) for x in args))
 
     @property
-    def _log_text(self):
+    def _log_text(self) -> str:
         return "\n".join(self._log_output)
 
-    def fnmatch_lines(self, lines2):
-        """Search captured text for matching lines using ``fnmatch.fnmatch``.
+    def fnmatch_lines(
+        self, lines2: Sequence[str], *, consecutive: bool = False
+    ) -> None:
+        """Check lines exist in the output (using :func:`python:fnmatch.fnmatch`).
 
         The argument is a list of lines which have to match and can use glob
         wildcards.  If they do not match a pytest.fail() is called.  The
-        matches and non-matches are also printed on stdout.
+        matches and non-matches are also shown as part of the error message.
 
+        :param lines2: string patterns to match.
+        :param consecutive: match lines consecutive?
         """
         __tracebackhide__ = True
-        self._match_lines(lines2, fnmatch, "fnmatch")
+        self._match_lines(lines2, fnmatch, "fnmatch", consecutive=consecutive)
 
-    def re_match_lines(self, lines2):
-        """Search captured text for matching lines using ``re.match``.
+    def re_match_lines(
+        self, lines2: Sequence[str], *, consecutive: bool = False
+    ) -> None:
+        """Check lines exist in the output (using :func:`python:re.match`).
 
         The argument is a list of lines which have to match using ``re.match``.
         If they do not match a pytest.fail() is called.
 
-        The matches and non-matches are also printed on stdout.
+        The matches and non-matches are also shown as part of the error message.
 
+        :param lines2: string patterns to match.
+        :param consecutive: match lines consecutively?
         """
         __tracebackhide__ = True
-        self._match_lines(lines2, lambda name, pat: re.match(pat, name), "re.match")
+        self._match_lines(
+            lines2,
+            lambda name, pat: bool(re.match(pat, name)),
+            "re.match",
+            consecutive=consecutive,
+        )
 
-    def _match_lines(self, lines2, match_func, match_nickname):
+    def _match_lines(
+        self,
+        lines2: Sequence[str],
+        match_func: Callable[[str, str], bool],
+        match_nickname: str,
+        *,
+        consecutive: bool = False
+    ) -> None:
         """Underlying implementation of ``fnmatch_lines`` and ``re_match_lines``.
 
         :param list[str] lines2: list of string patterns to match. The actual
@@ -1346,31 +1420,100 @@ class LineMatcher:
             pattern
         :param str match_nickname: the nickname for the match function that
             will be logged to stdout when a match occurs
-
+        :param consecutive: match lines consecutively?
         """
-        assert isinstance(lines2, Sequence)
+        if not isinstance(lines2, collections.abc.Sequence):
+            raise TypeError("invalid type for lines2: {}".format(type(lines2).__name__))
         lines2 = self._getlines(lines2)
         lines1 = self.lines[:]
         nextline = None
         extralines = []
         __tracebackhide__ = True
+        wnick = len(match_nickname) + 1
+        started = False
         for line in lines2:
             nomatchprinted = False
             while lines1:
                 nextline = lines1.pop(0)
                 if line == nextline:
                     self._log("exact match:", repr(line))
+                    started = True
                     break
                 elif match_func(nextline, line):
                     self._log("%s:" % match_nickname, repr(line))
-                    self._log("   with:", repr(nextline))
+                    self._log(
+                        "{:>{width}}".format("with:", width=wnick), repr(nextline)
+                    )
+                    started = True
                     break
                 else:
+                    if consecutive and started:
+                        msg = "no consecutive match: {!r}".format(line)
+                        self._log(msg)
+                        self._log(
+                            "{:>{width}}".format("with:", width=wnick), repr(nextline)
+                        )
+                        self._fail(msg)
                     if not nomatchprinted:
-                        self._log("nomatch:", repr(line))
+                        self._log(
+                            "{:>{width}}".format("nomatch:", width=wnick), repr(line)
+                        )
                         nomatchprinted = True
-                    self._log("    and:", repr(nextline))
+                    self._log("{:>{width}}".format("and:", width=wnick), repr(nextline))
                 extralines.append(nextline)
             else:
-                self._log("remains unmatched: {!r}".format(line))
-                pytest.fail(self._log_text)
+                msg = "remains unmatched: {!r}".format(line)
+                self._log(msg)
+                self._fail(msg)
+        self._log_output = []
+
+    def no_fnmatch_line(self, pat: str) -> None:
+        """Ensure captured lines do not match the given pattern, using ``fnmatch.fnmatch``.
+
+        :param str pat: the pattern to match lines.
+        """
+        __tracebackhide__ = True
+        self._no_match_line(pat, fnmatch, "fnmatch")
+
+    def no_re_match_line(self, pat: str) -> None:
+        """Ensure captured lines do not match the given pattern, using ``re.match``.
+
+        :param str pat: the regular expression to match lines.
+        """
+        __tracebackhide__ = True
+        self._no_match_line(
+            pat, lambda name, pat: bool(re.match(pat, name)), "re.match"
+        )
+
+    def _no_match_line(
+        self, pat: str, match_func: Callable[[str, str], bool], match_nickname: str
+    ) -> None:
+        """Ensure captured lines does not have a the given pattern, using ``fnmatch.fnmatch``
+
+        :param str pat: the pattern to match lines
+        """
+        __tracebackhide__ = True
+        nomatch_printed = False
+        wnick = len(match_nickname) + 1
+        for line in self.lines:
+            if match_func(line, pat):
+                msg = "{}: {!r}".format(match_nickname, pat)
+                self._log(msg)
+                self._log("{:>{width}}".format("with:", width=wnick), repr(line))
+                self._fail(msg)
+            else:
+                if not nomatch_printed:
+                    self._log("{:>{width}}".format("nomatch:", width=wnick), repr(pat))
+                    nomatch_printed = True
+                self._log("{:>{width}}".format("and:", width=wnick), repr(line))
+        self._log_output = []
+
+    def _fail(self, msg: str) -> None:
+        __tracebackhide__ = True
+        log_text = self._log_text
+        self._log_output = []
+        pytest.fail(log_text)
+
+    def str(self) -> str:
+        """Return the entire original text."""
+        return "\n".join(self.lines)

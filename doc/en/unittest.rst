@@ -166,6 +166,9 @@ the ``self.db`` values in the traceback:
     E       assert 0
 
     test_unittest_db.py:13: AssertionError
+    ========================= short test summary info ==========================
+    FAILED test_unittest_db.py::MyTest::test_method1 - AssertionError: <conft...
+    FAILED test_unittest_db.py::MyTest::test_method2 - AssertionError: <conft...
     ============================ 2 failed in 0.12s =============================
 
 This default pytest traceback shows that the two test methods
@@ -237,17 +240,6 @@ was executed ahead of the ``test_method``.
    and then start to benefit from the full pytest feature set step by step.
 
 .. _pdb-unittest-note:
-
-.. note::
-
-    Running tests from ``unittest.TestCase`` subclasses with ``--pdb`` will
-    disable tearDown and cleanup methods for the case that an Exception
-    occurs. This allows proper post mortem debugging for all applications
-    which have significant logic in their tearDown machinery. However,
-    supporting this feature has the following side effect: If people
-    overwrite ``unittest.TestCase`` ``__call__`` or ``run``, they need to
-    to overwrite ``debug`` in the same way  (this is also true for standard
-    unittest).
 
 .. note::
 

@@ -179,24 +179,58 @@ class TestDoctests:
         result = testdir.runpytest("--doctest-modules")
         result.stdout.fnmatch_lines(
             [
-                "*unexpected_exception*",
-                "*>>> i = 0*",
-                "*>>> 0 / i*",
-                "*UNEXPECTED*ZeroDivision*",
-            ]
+                "test_doctest_unexpected_exception.txt F *",
+                "",
+                "*= FAILURES =*",
+                "*_ [[]doctest[]] test_doctest_unexpected_exception.txt _*",
+                "001 >>> i = 0",
+                "002 >>> 0 / i",
+                "UNEXPECTED EXCEPTION: ZeroDivisionError*",
+                "Traceback (most recent call last):",
+                '  File "*/doctest.py", line *, in __run',
+                "    *",
+                '  File "<doctest test_doctest_unexpected_exception.txt[1]>", line 1, in <module>',
+                "ZeroDivisionError: division by zero",
+                "*/test_doctest_unexpected_exception.txt:2: UnexpectedException",
+            ],
+            consecutive=True,
         )
 
-    def test_doctest_skip(self, testdir):
+    def test_doctest_outcomes(self, testdir):
         testdir.maketxtfile(
-            """
+            test_skip="""
             >>> 1
             1
             >>> import pytest
             >>> pytest.skip("")
-        """
+            >>> 2
+            3
+            """,
+            test_xfail="""
+            >>> import pytest
+            >>> pytest.xfail("xfail_reason")
+            >>> foo
+            bar
+            """,
+            test_importorskip="""
+            >>> import pytest
+            >>> pytest.importorskip("doesnotexist")
+            >>> foo
+            bar
+            """,
         )
         result = testdir.runpytest("--doctest-modules")
-        result.stdout.fnmatch_lines(["*1 skipped*"])
+        result.stdout.fnmatch_lines(
+            [
+                "collected 3 items",
+                "",
+                "test_importorskip.txt s *",
+                "test_skip.txt s *",
+                "test_xfail.txt x *",
+                "",
+                "*= 2 skipped, 1 xfailed in *",
+            ]
+        )
 
     def test_docstring_partial_context_around_error(self, testdir):
         """Test that we show some context before the actual line of a failing
@@ -239,8 +273,8 @@ class TestDoctests:
             ]
         )
         # lines below should be trimmed out
-        assert "text-line-2" not in result.stdout.str()
-        assert "text-line-after" not in result.stdout.str()
+        result.stdout.no_fnmatch_line("*text-line-2*")
+        result.stdout.no_fnmatch_line("*text-line-after*")
 
     def test_docstring_full_context_around_error(self, testdir):
         """Test that we show the whole context before the actual line of a failing
@@ -288,12 +322,67 @@ class TestDoctests:
         )
         result = testdir.runpytest("--doctest-modules")
         result.stdout.fnmatch_lines(
+            ["*hello*", "006*>>> 1/0*", "*UNEXPECTED*ZeroDivision*", "*1 failed*"]
+        )
+
+    def test_doctest_linedata_on_property(self, testdir):
+        testdir.makepyfile(
+            """
+            class Sample(object):
+                @property
+                def some_property(self):
+                    '''
+                    >>> Sample().some_property
+                    'another thing'
+                    '''
+                    return 'something'
+            """
+        )
+        result = testdir.runpytest("--doctest-modules")
+        result.stdout.fnmatch_lines(
             [
-                "*hello*",
-                "*EXAMPLE LOCATION UNKNOWN, not showing all tests of that example*",
-                "*1/0*",
-                "*UNEXPECTED*ZeroDivision*",
-                "*1 failed*",
+                "*= FAILURES =*",
+                "*_ [[]doctest[]] test_doctest_linedata_on_property.Sample.some_property _*",
+                "004 ",
+                "005         >>> Sample().some_property",
+                "Expected:",
+                "    'another thing'",
+                "Got:",
+                "    'something'",
+                "",
+                "*/test_doctest_linedata_on_property.py:5: DocTestFailure",
+                "*= 1 failed in *",
+            ]
+        )
+
+    def test_doctest_no_linedata_on_overriden_property(self, testdir):
+        testdir.makepyfile(
+            """
+            class Sample(object):
+                @property
+                def some_property(self):
+                    '''
+                    >>> Sample().some_property
+                    'another thing'
+                    '''
+                    return 'something'
+                some_property = property(some_property.__get__, None, None, some_property.__doc__)
+            """
+        )
+        result = testdir.runpytest("--doctest-modules")
+        result.stdout.fnmatch_lines(
+            [
+                "*= FAILURES =*",
+                "*_ [[]doctest[]] test_doctest_no_linedata_on_overriden_property.Sample.some_property _*",
+                "EXAMPLE LOCATION UNKNOWN, not showing all tests of that example",
+                "[?][?][?] >>> Sample().some_property",
+                "Expected:",
+                "    'another thing'",
+                "Got:",
+                "    'something'",
+                "",
+                "*/test_doctest_no_linedata_on_overriden_property.py:None: DocTestFailure",
+                "*= 1 failed in *",
             ]
         )
 
@@ -334,7 +423,7 @@ class TestDoctests:
             [
                 "*ERROR collecting hello.py*",
                 "*{e}: No module named *asdals*".format(e=MODULE_NOT_FOUND_ERROR),
-                "*Interrupted: 1 errors during collection*",
+                "*Interrupted: 1 error during collection*",
             ]
         )
 
@@ -839,7 +928,8 @@ class TestLiterals:
         reprec = testdir.inline_run()
         reprec.assertoutcome(failed=1)
 
-    def test_number_re(self):
+    def test_number_re(self) -> None:
+        _number_re = _get_checker()._number_re  # type: ignore
         for s in [
             "1.",
             "+1.",
@@ -861,12 +951,12 @@ class TestLiterals:
             "-1.2e-3",
         ]:
             print(s)
-            m = _get_checker()._number_re.match(s)
+            m = _number_re.match(s)
             assert m is not None
             assert float(m.group()) == pytest.approx(float(s))
         for s in ["1", "abc"]:
             print(s)
-            assert _get_checker()._number_re.match(s) is None
+            assert _number_re.match(s) is None
 
     @pytest.mark.parametrize("config_mode", ["ini", "comment"])
     def test_number_precision(self, testdir, config_mode):
@@ -1177,7 +1267,7 @@ class TestDoctestAutoUseFixtures:
             """
             )
         result = testdir.runpytest("--doctest-modules")
-        assert "FAILURES" not in str(result.stdout.str())
+        result.stdout.no_fnmatch_line("*FAILURES*")
         result.stdout.fnmatch_lines(["*=== 1 passed in *"])
 
     @pytest.mark.parametrize("scope", SCOPES)
@@ -1209,7 +1299,7 @@ class TestDoctestAutoUseFixtures:
         """
         )
         result = testdir.runpytest("--doctest-modules")
-        assert "FAILURES" not in str(result.stdout.str())
+        str(result.stdout.no_fnmatch_line("*FAILURES*"))
         result.stdout.fnmatch_lines(["*=== 1 passed in *"])
 
 

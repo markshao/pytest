@@ -3,7 +3,6 @@ import textwrap
 
 import pytest
 from _pytest import fixtures
-from _pytest.fixtures import FixtureLookupError
 from _pytest.fixtures import FixtureRequest
 from _pytest.pathlib import Path
 from _pytest.pytester import get_public_names
@@ -455,7 +454,7 @@ class TestFillFixtures:
                 "*1 error*",
             ]
         )
-        assert "INTERNAL" not in result.stdout.str()
+        result.stdout.no_fnmatch_line("*INTERNAL*")
 
     def test_fixture_excinfo_leak(self, testdir):
         # on python2 sys.excinfo would leak into fixture executions
@@ -503,7 +502,7 @@ class TestRequestBasic:
         assert repr(req).find(req.function.__name__) != -1
 
     def test_request_attributes_method(self, testdir):
-        item, = testdir.getitems(
+        (item,) = testdir.getitems(
             """
             import pytest
             class TestB(object):
@@ -531,7 +530,7 @@ class TestRequestBasic:
                     pass
         """
         )
-        item1, = testdir.genitems([modcol])
+        (item1,) = testdir.genitems([modcol])
         assert item1.name == "test_method"
         arg2fixturedefs = fixtures.FixtureRequest(item1)._arg2fixturedefs
         assert len(arg2fixturedefs) == 1
@@ -654,7 +653,7 @@ class TestRequestBasic:
         )
         req = item._request
 
-        with pytest.raises(FixtureLookupError):
+        with pytest.raises(pytest.FixtureLookupError):
             req.getfixturevalue("notexists")
         val = req.getfixturevalue("something")
         assert val == 1
@@ -781,7 +780,7 @@ class TestRequestBasic:
 
     def test_request_getmodulepath(self, testdir):
         modcol = testdir.getmodulecol("def test_somefunc(): pass")
-        item, = testdir.genitems([modcol])
+        (item,) = testdir.genitems([modcol])
         req = fixtures.FixtureRequest(item)
         assert req.fspath == modcol.fspath
 
@@ -1101,6 +1100,38 @@ class TestFixtureUsages:
         result.stdout.fnmatch_lines(
             "*Fixture 'badscope' from test_invalid_scope.py got an unexpected scope value 'functions'"
         )
+
+    @pytest.mark.parametrize("scope", ["function", "session"])
+    def test_parameters_without_eq_semantics(self, scope, testdir):
+        testdir.makepyfile(
+            """
+            class NoEq1:  # fails on `a == b` statement
+                def __eq__(self, _):
+                    raise RuntimeError
+
+            class NoEq2:  # fails on `if a == b:` statement
+                def __eq__(self, _):
+                    class NoBool:
+                        def __bool__(self):
+                            raise RuntimeError
+                    return NoBool()
+
+            import pytest
+            @pytest.fixture(params=[NoEq1(), NoEq2()], scope={scope!r})
+            def no_eq(request):
+                return request.param
+
+            def test1(no_eq):
+                pass
+
+            def test2(no_eq):
+                pass
+        """.format(
+                scope=scope
+            )
+        )
+        result = testdir.runpytest()
+        result.stdout.fnmatch_lines(["*4 passed*"])
 
     def test_funcarg_parametrized_and_used_twice(self, testdir):
         testdir.makepyfile(
@@ -2647,7 +2678,7 @@ class TestFixtureMarker:
             *3 passed*
         """
         )
-        assert "error" not in result.stdout.str()
+        result.stdout.no_fnmatch_line("*error*")
 
     def test_fixture_finalizer(self, testdir):
         testdir.makeconftest(
@@ -3081,7 +3112,7 @@ class TestErrors:
             *KeyError*
             *ERROR*teardown*test_2*
             *KeyError*
-            *3 pass*2 error*
+            *3 pass*2 errors*
         """
         )
 
@@ -3151,7 +3182,7 @@ class TestShowFixtures:
             *hello world*
         """
         )
-        assert "arg0" not in result.stdout.str()
+        result.stdout.no_fnmatch_line("*arg0*")
 
     @pytest.mark.parametrize("testmod", [True, False])
     def test_show_fixtures_conftest(self, testdir, testmod):
@@ -3662,9 +3693,26 @@ class TestParameterizedSubRequest:
                 "    test_foos.py::test_foo",
                 "",
                 "Requested fixture 'fix_with_param' defined in:",
-                "*fix.py:4",
+                "{}:4".format(fixfile),
                 "Requested here:",
                 "test_foos.py:4",
+                "*1 failed*",
+            ]
+        )
+
+        # With non-overlapping rootdir, passing tests_dir.
+        rootdir = testdir.mkdir("rootdir")
+        rootdir.chdir()
+        result = testdir.runpytest("--rootdir", rootdir, tests_dir)
+        result.stdout.fnmatch_lines(
+            [
+                "The requested fixture has no parameter defined for test:",
+                "    test_foos.py::test_foo",
+                "",
+                "Requested fixture 'fix_with_param' defined in:",
+                "{}:4".format(fixfile),
+                "Requested here:",
+                "{}:4".format(testfile),
                 "*1 failed*",
             ]
         )
@@ -4106,7 +4154,7 @@ def test_fixture_named_request(testdir):
     )
 
 
-def test_fixture_duplicated_arguments(testdir):
+def test_fixture_duplicated_arguments():
     """Raise error if there are positional and keyword arguments for the same parameter (#1682)."""
     with pytest.raises(TypeError) as excinfo:
 
@@ -4121,7 +4169,7 @@ def test_fixture_duplicated_arguments(testdir):
     )
 
 
-def test_fixture_with_positionals(testdir):
+def test_fixture_with_positionals():
     """Raise warning, but the positionals should still works (#1682)."""
     from _pytest.deprecated import FIXTURE_POSITIONAL_ARGUMENTS
 
@@ -4187,3 +4235,58 @@ def test_indirect_fixture_does_not_break_scope(testdir):
     )
     result = testdir.runpytest()
     result.assert_outcomes(passed=7)
+
+
+def test_fixture_parametrization_nparray(testdir):
+    pytest.importorskip("numpy")
+
+    testdir.makepyfile(
+        """
+        from numpy import linspace
+        from pytest import fixture
+
+        @fixture(params=linspace(1, 10, 10))
+        def value(request):
+            return request.param
+
+        def test_bug(value):
+            assert value == value
+    """
+    )
+    result = testdir.runpytest()
+    result.assert_outcomes(passed=10)
+
+
+def test_fixture_arg_ordering(testdir):
+    """
+    This test describes how fixtures in the same scope but without explicit dependencies
+    between them are created. While users should make dependencies explicit, often
+    they rely on this order, so this test exists to catch regressions in this regard.
+    See #6540 and #6492.
+    """
+    p1 = testdir.makepyfile(
+        """
+        import pytest
+
+        suffixes = []
+
+        @pytest.fixture
+        def fix_1(): suffixes.append("fix_1")
+        @pytest.fixture
+        def fix_2(): suffixes.append("fix_2")
+        @pytest.fixture
+        def fix_3(): suffixes.append("fix_3")
+        @pytest.fixture
+        def fix_4(): suffixes.append("fix_4")
+        @pytest.fixture
+        def fix_5(): suffixes.append("fix_5")
+
+        @pytest.fixture
+        def fix_combined(fix_1, fix_2, fix_3, fix_4, fix_5): pass
+
+        def test_suffix(fix_combined):
+            assert suffixes == ["fix_1", "fix_2", "fix_3", "fix_4", "fix_5"]
+        """
+    )
+    result = testdir.runpytest("-vv", str(p1))
+    assert result.ret == 0

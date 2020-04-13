@@ -4,6 +4,7 @@ from functools import wraps
 
 import pytest
 from _pytest.compat import _PytestWrapper
+from _pytest.compat import cached_property
 from _pytest.compat import get_real_func
 from _pytest.compat import is_generator
 from _pytest.compat import safe_getattr
@@ -146,11 +147,15 @@ def test_is_generator_async_gen_syntax(testdir):
 
 class ErrorsHelper:
     @property
+    def raise_baseexception(self):
+        raise BaseException("base exception should be raised")
+
+    @property
     def raise_exception(self):
         raise Exception("exception should be catched")
 
     @property
-    def raise_fail(self):
+    def raise_fail_outcome(self):
         pytest.fail("fail should be catched")
 
 
@@ -159,13 +164,15 @@ def test_helper_failures():
     with pytest.raises(Exception):
         helper.raise_exception
     with pytest.raises(OutcomeException):
-        helper.raise_fail
+        helper.raise_fail_outcome
 
 
 def test_safe_getattr():
     helper = ErrorsHelper()
     assert safe_getattr(helper, "raise_exception", "default") == "default"
-    assert safe_getattr(helper, "raise_fail", "default") == "default"
+    assert safe_getattr(helper, "raise_fail_outcome", "default") == "default"
+    with pytest.raises(BaseException):
+        assert safe_getattr(helper, "raise_baseexception", "default")
 
 
 def test_safe_isclass():
@@ -178,3 +185,23 @@ def test_safe_isclass():
             assert False, "Should be ignored"
 
     assert safe_isclass(CrappyClass()) is False
+
+
+def test_cached_property() -> None:
+    ncalls = 0
+
+    class Class:
+        @cached_property
+        def prop(self) -> int:
+            nonlocal ncalls
+            ncalls += 1
+            return ncalls
+
+    c1 = Class()
+    assert ncalls == 0
+    assert c1.prop == 1
+    assert c1.prop == 1
+    c2 = Class()
+    assert ncalls == 1
+    assert c2.prop == 2
+    assert c1.prop == 1

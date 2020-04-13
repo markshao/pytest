@@ -1,3 +1,5 @@
+.. _`reference`:
+
 API Reference
 =============
 
@@ -59,7 +61,7 @@ pytest.raises
 
 **Tutorial**: :ref:`assertraises`.
 
-.. autofunction:: pytest.raises(expected_exception: Exception, [match])
+.. autofunction:: pytest.raises(expected_exception: Exception [, *, match])
     :with: excinfo
 
 pytest.deprecated_call
@@ -124,7 +126,7 @@ Add warning filters to marked test items.
 
         .. code-block:: python
 
-            @pytest.mark.warnings("ignore:.*usage will be deprecated.*:DeprecationWarning")
+            @pytest.mark.filterwarnings("ignore:.*usage will be deprecated.*:DeprecationWarning")
             def test_foo():
                 ...
 
@@ -202,7 +204,8 @@ Marks a test function as *expected to fail*.
     :type condition: bool or str
     :param condition:
         Condition for marking the test function as xfail (``True/False`` or a
-        :ref:`condition string <string conditions>`).
+        :ref:`condition string <string conditions>`). If a bool, you also have
+        to specify ``reason`` (see :ref:`condition string <string conditions>`).
     :keyword str reason: Reason why the test function is marked as xfail.
     :keyword Exception raises: Exception subclass expected to be raised by the test function; other exceptions will fail the test.
     :keyword bool run:
@@ -241,6 +244,8 @@ Will create and attach a :class:`Mark <_pytest.mark.structures.Mark>` object to 
     mark.kwargs == {"method": "thread"}
 
 
+.. _`fixtures-api`:
+
 Fixtures
 --------
 
@@ -271,6 +276,8 @@ Example of a fixture requiring another fixture:
 For more details, consult the full :ref:`fixtures docs <fixture>`.
 
 
+.. _`pytest.fixture-api`:
+
 @pytest.fixture
 ~~~~~~~~~~~~~~~
 
@@ -278,7 +285,7 @@ For more details, consult the full :ref:`fixtures docs <fixture>`.
     :decorator:
 
 
-.. _`cache-api`:
+.. fixture:: cache
 
 config.cache
 ~~~~~~~~~~~~
@@ -298,6 +305,8 @@ Under the hood, the cache plugin uses the simple
 .. automethod:: Cache.set
 .. automethod:: Cache.makedir
 
+
+.. fixture:: capsys
 
 capsys
 ~~~~~~
@@ -324,6 +333,8 @@ capsys
     :members:
 
 
+.. fixture:: capsysbinary
+
 capsysbinary
 ~~~~~~~~~~~~
 
@@ -344,6 +355,8 @@ capsysbinary
             assert captured.out == b"hello\n"
 
 
+.. fixture:: capfd
+
 capfd
 ~~~~~~
 
@@ -360,9 +373,11 @@ capfd
 
         def test_system_echo(capfd):
             os.system('echo "hello"')
-            captured = capsys.readouterr()
+            captured = capfd.readouterr()
             assert captured.out == "hello\n"
 
+
+.. fixture:: capfdbinary
 
 capfdbinary
 ~~~~~~~~~~~~
@@ -384,6 +399,8 @@ capfdbinary
             assert captured.out == b"hello\n"
 
 
+.. fixture:: doctest_namespace
+
 doctest_namespace
 ~~~~~~~~~~~~~~~~~
 
@@ -402,6 +419,8 @@ doctest_namespace
     For more details: :ref:`doctest_namespace`.
 
 
+.. fixture:: request
+
 request
 ~~~~~~~
 
@@ -413,11 +432,15 @@ The ``request`` fixture is a special fixture providing information of the reques
     :members:
 
 
+.. fixture:: pytestconfig
+
 pytestconfig
 ~~~~~~~~~~~~
 
 .. autofunction:: _pytest.fixtures.pytestconfig()
 
+
+.. fixture:: record_property
 
 record_property
 ~~~~~~~~~~~~~~~~~~~
@@ -427,12 +450,17 @@ record_property
 .. autofunction:: _pytest.junitxml.record_property()
 
 
+.. fixture:: record_testsuite_property
+
 record_testsuite_property
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Tutorial**: :ref:`record_testsuite_property example`.
 
 .. autofunction:: _pytest.junitxml.record_testsuite_property()
+
+
+.. fixture:: caplog
 
 caplog
 ~~~~~~
@@ -448,6 +476,8 @@ caplog
     :members:
 
 
+.. fixture:: monkeypatch
+
 monkeypatch
 ~~~~~~~~~~~
 
@@ -462,6 +492,9 @@ monkeypatch
 
 .. autoclass:: _pytest.monkeypatch.MonkeyPatch
     :members:
+
+
+.. fixture:: testdir
 
 testdir
 ~~~~~~~
@@ -489,6 +522,8 @@ To use it, include in your top-most ``conftest.py`` file:
     :members:
 
 
+.. fixture:: recwarn
+
 recwarn
 ~~~~~~~
 
@@ -512,6 +547,8 @@ Each recorded warning is an instance of :class:`warnings.WarningMessage`.
     differently; see :ref:`ensuring_function_triggers`.
 
 
+.. fixture:: tmp_path
+
 tmp_path
 ~~~~~~~~
 
@@ -522,6 +559,8 @@ tmp_path
 .. autofunction:: tmp_path()
     :no-auto-options:
 
+
+.. fixture:: tmp_path_factory
 
 tmp_path_factory
 ~~~~~~~~~~~~~~~~
@@ -538,6 +577,8 @@ tmp_path_factory
 .. automethod:: TempPathFactory.getbasetemp
 
 
+.. fixture:: tmpdir
+
 tmpdir
 ~~~~~~
 
@@ -548,6 +589,8 @@ tmpdir
 .. autofunction:: tmpdir()
     :no-auto-options:
 
+
+.. fixture:: tmpdir_factory
 
 tmpdir_factory
 ~~~~~~~~~~~~~~
@@ -734,7 +777,7 @@ ExceptionInfo
 pytest.ExitCode
 ~~~~~~~~~~~~~~~
 
-.. autoclass:: _pytest.main.ExitCode
+.. autoclass:: _pytest.config.ExitCode
     :members:
 
 
@@ -839,13 +882,17 @@ TestReport
 
 .. autoclass:: _pytest.runner.TestReport()
     :members:
+    :show-inheritance:
     :inherited-members:
 
 _Result
 ~~~~~~~
 
+Result used within :ref:`hook wrappers <hookwrapper>`.
+
 .. autoclass:: pluggy.callers._Result
-    :members:
+.. automethod:: pluggy.callers._Result.get_result
+.. automethod:: pluggy.callers._Result.force_result
 
 Special Variables
 -----------------
@@ -897,8 +944,8 @@ Can be either a ``str`` or ``Sequence[str]``.
     pytest_plugins = ("myapp.testsupport.tools", "myapp.testsupport.regression")
 
 
-pytest_mark
-~~~~~~~~~~~
+pytestmark
+~~~~~~~~~~
 
 **Tutorial**: :ref:`scoped-marking`
 
@@ -930,19 +977,16 @@ Environment Variables
 
 Environment variables that can be used to change pytest's behavior.
 
-PYTEST_ADDOPTS
-~~~~~~~~~~~~~~
+.. envvar:: PYTEST_ADDOPTS
 
 This contains a command-line (parsed by the py:mod:`shlex` module) that will be **prepended** to the command line given
 by the user, see :ref:`adding default options` for more information.
 
-PYTEST_DEBUG
-~~~~~~~~~~~~
+.. envvar:: PYTEST_DEBUG
 
 When set, pytest will print tracing and debug information.
 
-PYTEST_PLUGINS
-~~~~~~~~~~~~~~
+.. envvar:: PYTEST_PLUGINS
 
 Contains comma-separated list of modules that should be loaded as plugins:
 
@@ -950,14 +994,12 @@ Contains comma-separated list of modules that should be loaded as plugins:
 
     export PYTEST_PLUGINS=mymodule.plugin,xdist
 
-PYTEST_DISABLE_PLUGIN_AUTOLOAD
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. envvar:: PYTEST_DISABLE_PLUGIN_AUTOLOAD
 
 When set, disables plugin auto-loading through setuptools entrypoints. Only explicitly specified plugins will be
 loaded.
 
-PYTEST_CURRENT_TEST
-~~~~~~~~~~~~~~~~~~~
+.. envvar:: PYTEST_CURRENT_TEST
 
 This is not meant to be set by users, but is set by pytest internally with the name of the current test so other
 processes can inspect it, see :ref:`pytest current test env` for more information.
@@ -986,7 +1028,7 @@ file, usually located at the root of your repository. All options must be under 
     down problems.
     When possible, it is recommended to use the latter files to hold your pytest configuration.
 
-Configuration file options may be overwritten in the command-line by using ``-o/--override``, which can also be
+Configuration file options may be overwritten in the command-line by using ``-o/--override-ini``, which can also be
 passed multiple times. The expected format is ``name=value``. For example::
 
    pytest -o console_output_style=classic -o cache_dir=/tmp/mycache
@@ -1160,9 +1202,17 @@ passed multiple times. The expected format is ``name=value``. For example::
 .. confval:: junit_logging
 
     .. versionadded:: 3.5
+    .. versionchanged:: 5.4
+        ``log``, ``all``, ``out-err`` options added.
 
-    Configures if stdout/stderr should be written to the JUnit XML file. Valid values are
-    ``system-out``, ``system-err``, and ``no`` (the default).
+    Configures if captured output should be written to the JUnit XML file. Valid values are:
+
+    * ``log``: write only ``logging`` captured output.
+    * ``system-out``: write captured ``stdout`` contents.
+    * ``system-err``: write captured ``stderr`` contents.
+    * ``out-err``: write both captured ``stdout`` and ``stderr`` contents.
+    * ``all``: write captured ``logging``, ``stdout`` and ``stderr`` contents.
+    * ``no`` (the default): no captured output is written.
 
     .. code-block:: ini
 
@@ -1192,6 +1242,38 @@ passed multiple times. The expected format is ``name=value``. For example::
         [pytest]
         junit_suite_name = my_suite
 
+.. confval:: log_auto_indent
+
+    Allow selective auto-indentation of multiline log messages.
+
+    Supports command line option ``--log-auto-indent [value]``
+    and config option ``log_auto_indent = [value]`` to set the
+    auto-indentation behavior for all logging.
+
+    ``[value]`` can be:
+        * True or "On" - Dynamically auto-indent multiline log messages
+        * False or "Off" or 0 - Do not auto-indent multiline log messages (the default behavior)
+        * [positive integer] - auto-indent multiline log messages by [value] spaces
+
+    .. code-block:: ini
+
+        [pytest]
+        log_auto_indent = False
+
+    Supports passing kwarg ``extra={"auto_indent": [value]}`` to
+    calls to ``logging.log()`` to specify auto-indentation behavior for
+    a specific entry in the log. ``extra`` kwarg overrides the value specified
+    on the command line or in the config.
+
+.. confval:: log_cli
+
+    Enable log display during test run (also known as :ref:`"live logging" <live_logs>`).
+    The default is ``False``.
+
+    .. code-block:: ini
+
+        [pytest]
+        log_cli = True
 
 .. confval:: log_cli_date_format
 

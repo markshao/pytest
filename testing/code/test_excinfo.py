@@ -3,6 +3,7 @@ import os
 import queue
 import sys
 import textwrap
+from typing import Union
 
 import py
 
@@ -11,7 +12,8 @@ import pytest
 from _pytest._code.code import ExceptionChainRepr
 from _pytest._code.code import ExceptionInfo
 from _pytest._code.code import FormattedExcinfo
-
+from _pytest._io import TerminalWriter
+from _pytest.pytester import LineMatcher
 
 try:
     import importlib
@@ -19,8 +21,6 @@ except ImportError:
     invalidate_import_caches = None
 else:
     invalidate_import_caches = getattr(importlib, "invalidate_caches", None)
-
-pytest_version_info = tuple(map(int, pytest.__version__.split(".")[:3]))
 
 
 @pytest.fixture
@@ -59,9 +59,9 @@ def test_excinfo_getstatement():
     except ValueError:
         excinfo = _pytest._code.ExceptionInfo.from_current()
     linenumbers = [
-        _pytest._code.getrawcode(f).co_firstlineno - 1 + 4,
-        _pytest._code.getrawcode(f).co_firstlineno - 1 + 1,
-        _pytest._code.getrawcode(g).co_firstlineno - 1 + 1,
+        f.__code__.co_firstlineno - 1 + 4,
+        f.__code__.co_firstlineno - 1 + 1,
+        g.__code__.co_firstlineno - 1 + 1,
     ]
     values = list(excinfo.traceback)
     foundlinenumbers = [x.lineno for x in values]
@@ -224,23 +224,25 @@ class TestTraceback_f_g_h:
         repr = excinfo.getrepr()
         assert "RuntimeError: hello" in str(repr.reprcrash)
 
-    def test_traceback_no_recursion_index(self):
-        def do_stuff():
+    def test_traceback_no_recursion_index(self) -> None:
+        def do_stuff() -> None:
             raise RuntimeError
 
-        def reraise_me():
+        def reraise_me() -> None:
             import sys
 
             exc, val, tb = sys.exc_info()
+            assert val is not None
             raise val.with_traceback(tb)
 
-        def f(n):
+        def f(n: int) -> None:
             try:
                 do_stuff()
             except:  # noqa
                 reraise_me()
 
         excinfo = pytest.raises(RuntimeError, f, 8)
+        assert excinfo is not None
         traceback = excinfo.traceback
         recindex = traceback.recursionindex()
         assert recindex is None
@@ -316,8 +318,19 @@ def test_excinfo_exconly():
 
 def test_excinfo_repr_str():
     excinfo = pytest.raises(ValueError, h)
-    assert repr(excinfo) == "<ExceptionInfo ValueError tblen=4>"
-    assert str(excinfo) == "<ExceptionInfo ValueError tblen=4>"
+    assert repr(excinfo) == "<ExceptionInfo ValueError() tblen=4>"
+    assert str(excinfo) == "<ExceptionInfo ValueError() tblen=4>"
+
+    class CustomException(Exception):
+        def __repr__(self):
+            return "custom_repr"
+
+    def raises():
+        raise CustomException()
+
+    excinfo = pytest.raises(CustomException, raises)
+    assert repr(excinfo) == "<ExceptionInfo custom_repr tblen=2>"
+    assert str(excinfo) == "<ExceptionInfo custom_repr tblen=2>"
 
 
 def test_excinfo_for_later():
@@ -398,13 +411,15 @@ def test_match_raises_error(testdir):
     )
     result = testdir.runpytest()
     assert result.ret != 0
-    result.stdout.fnmatch_lines(["*AssertionError*Pattern*[123]*not found*"])
-    assert "__tracebackhide__ = True" not in result.stdout.str()
+
+    exc_msg = "Pattern '[[]123[]]+' does not match 'division by zero'"
+    result.stdout.fnmatch_lines(["E * AssertionError: {}".format(exc_msg)])
+    result.stdout.no_fnmatch_line("*__tracebackhide__ = True*")
 
     result = testdir.runpytest("--fulltrace")
     assert result.ret != 0
     result.stdout.fnmatch_lines(
-        ["*__tracebackhide__ = True*", "*AssertionError*Pattern*[123]*not found*"]
+        ["*__tracebackhide__ = True*", "E * AssertionError: {}".format(exc_msg)]
     )
 
 
@@ -491,65 +506,18 @@ raise ValueError()
         assert repr.reprtraceback.reprentries[1].lines[0] == ">   ???"
         assert repr.chain[0][0].reprentries[1].lines[0] == ">   ???"
 
-    def test_repr_source_failing_fullsource(self):
+    def test_repr_source_failing_fullsource(self, monkeypatch) -> None:
         pr = FormattedExcinfo()
 
-        class FakeCode:
-            class raw:
-                co_filename = "?"
+        try:
+            1 / 0
+        except ZeroDivisionError:
+            excinfo = ExceptionInfo.from_current()
 
-            path = "?"
-            firstlineno = 5
+        with monkeypatch.context() as m:
+            m.setattr(_pytest._code.Code, "fullsource", property(lambda self: None))
+            repr = pr.repr_excinfo(excinfo)
 
-            def fullsource(self):
-                return None
-
-            fullsource = property(fullsource)
-
-        class FakeFrame:
-            code = FakeCode()
-            f_locals = {}
-            f_globals = {}
-
-        class FakeTracebackEntry(_pytest._code.Traceback.Entry):
-            def __init__(self, tb, excinfo=None):
-                self.lineno = 5 + 3
-
-            @property
-            def frame(self):
-                return FakeFrame()
-
-        class Traceback(_pytest._code.Traceback):
-            Entry = FakeTracebackEntry
-
-        class FakeExcinfo(_pytest._code.ExceptionInfo):
-            typename = "Foo"
-            value = Exception()
-
-            def __init__(self):
-                pass
-
-            def exconly(self, tryshort):
-                return "EXC"
-
-            def errisinstance(self, cls):
-                return False
-
-        excinfo = FakeExcinfo()
-
-        class FakeRawTB:
-            tb_next = None
-
-        tb = FakeRawTB()
-        excinfo.traceback = Traceback(tb)
-
-        fail = IOError()
-        repr = pr.repr_excinfo(excinfo)
-        assert repr.reprtraceback.reprentries[0].lines[0] == ">   ???"
-        assert repr.chain[0][0].reprentries[0].lines[0] == ">   ???"
-
-        fail = py.error.ENOENT  # noqa
-        repr = pr.repr_excinfo(excinfo)
         assert repr.reprtraceback.reprentries[0].lines[0] == ">   ???"
         assert repr.chain[0][0].reprentries[0].lines[0] == ">   ???"
 
@@ -573,7 +541,7 @@ raise ValueError()
         reprlocals = p.repr_locals(loc)
         assert reprlocals.lines
         assert reprlocals.lines[0] == "__builtins__ = <builtins>"
-        assert '[NotImplementedError("") raised in repr()]' in reprlocals.lines[1]
+        assert "[NotImplementedError() raised in repr()]" in reprlocals.lines[1]
 
     def test_repr_local_with_exception_in_class_property(self):
         class ExceptionWithBrokenClass(Exception):
@@ -591,7 +559,7 @@ raise ValueError()
         reprlocals = p.repr_locals(loc)
         assert reprlocals.lines
         assert reprlocals.lines[0] == "__builtins__ = <builtins>"
-        assert '[ExceptionWithBrokenClass("") raised in repr()]' in reprlocals.lines[1]
+        assert "[ExceptionWithBrokenClass() raised in repr()]" in reprlocals.lines[1]
 
     def test_repr_local_truncated(self):
         loc = {"l": [i for i in range(10)]}
@@ -632,7 +600,6 @@ raise ValueError()
         assert lines[3] == "E       world"
         assert not lines[4:]
 
-        loc = repr_entry.reprlocals is not None
         loc = repr_entry.reprfileloc
         assert loc.path == mod.__file__
         assert loc.lineno == 3
@@ -811,14 +778,43 @@ raise ValueError()
         )
         excinfo = pytest.raises(ValueError, mod.entry)
 
-        p = FormattedExcinfo()
+        p = FormattedExcinfo(abspath=False)
+
+        raised = 0
+
+        orig_getcwd = os.getcwd
 
         def raiseos():
-            raise OSError(2)
+            nonlocal raised
+            if sys._getframe().f_back.f_code.co_name == "checked_call":
+                # Only raise with expected calls, but not via e.g. inspect for
+                # py38-windows.
+                raised += 1
+                raise OSError(2, "custom_oserror")
+            return orig_getcwd()
 
         monkeypatch.setattr(os, "getcwd", raiseos)
         assert p._makepath(__file__) == __file__
-        p.repr_traceback(excinfo)
+        assert raised == 1
+        repr_tb = p.repr_traceback(excinfo)
+
+        matcher = LineMatcher(str(repr_tb).splitlines())
+        matcher.fnmatch_lines(
+            [
+                "def entry():",
+                ">       f(0)",
+                "",
+                "{}:5: ".format(mod.__file__),
+                "_ _ *",
+                "",
+                "    def f(x):",
+                ">       raise ValueError(x)",
+                "E       ValueError: 0",
+                "",
+                "{}:3: ValueError".format(mod.__file__),
+            ]
+        )
+        assert raised == 3
 
     def test_repr_excinfo_addouterr(self, importasmod, tw_mock):
         mod = importasmod(
@@ -891,7 +887,7 @@ raise ValueError()
         from _pytest._code.code import TerminalRepr
 
         class MyRepr(TerminalRepr):
-            def toterminal(self, tw):
+            def toterminal(self, tw: TerminalWriter) -> None:
                 tw.line("я")
 
         x = str(MyRepr())
@@ -1041,7 +1037,7 @@ raise ValueError()
         """
         )
         excinfo = pytest.raises(ValueError, mod.f)
-        tw = py.io.TerminalWriter(stringio=True)
+        tw = TerminalWriter(stringio=True)
         repr = excinfo.getrepr(**reproptions)
         repr.toterminal(tw)
         assert tw.stringio.getvalue()
@@ -1218,13 +1214,15 @@ raise ValueError()
     @pytest.mark.parametrize(
         "reason, description",
         [
-            (
+            pytest.param(
                 "cause",
                 "The above exception was the direct cause of the following exception:",
+                id="cause",
             ),
-            (
+            pytest.param(
                 "context",
                 "During handling of the above exception, another exception occurred:",
+                id="context",
             ),
         ],
     )
@@ -1234,8 +1232,6 @@ raise ValueError()
         real traceback, such as those raised in a subprocess submitted by the multiprocessing
         module (#1984).
         """
-        from _pytest.pytester import LineMatcher
-
         exc_handling_code = " from e" if reason == "cause" else ""
         mod = importasmod(
             """
@@ -1259,7 +1255,7 @@ raise ValueError()
         getattr(excinfo.value, attr).__traceback__ = None
 
         r = excinfo.getrepr()
-        tw = py.io.TerminalWriter(stringio=True)
+        tw = TerminalWriter(stringio=True)
         tw.hasmarkup = False
         r.toterminal(tw)
 
@@ -1320,9 +1316,10 @@ raise ValueError()
 @pytest.mark.parametrize("style", ["short", "long"])
 @pytest.mark.parametrize("encoding", [None, "utf8", "utf16"])
 def test_repr_traceback_with_unicode(style, encoding):
-    msg = "☹"
-    if encoding is not None:
-        msg = msg.encode(encoding)
+    if encoding is None:
+        msg = "☹"  # type: Union[str, bytes]
+    else:
+        msg = "☹".encode(encoding)
     try:
         raise RuntimeError(msg)
     except RuntimeError:
@@ -1343,7 +1340,8 @@ def test_cwd_deleted(testdir):
     )
     result = testdir.runpytest()
     result.stdout.fnmatch_lines(["* 1 failed in *"])
-    assert "INTERNALERROR" not in result.stdout.str() + result.stderr.str()
+    result.stdout.no_fnmatch_line("*INTERNALERROR*")
+    result.stderr.no_fnmatch_line("*INTERNALERROR*")
 
 
 @pytest.mark.usefixtures("limited_recursion_depth")
@@ -1352,7 +1350,6 @@ def test_exception_repr_extraction_error_on_recursion():
     Ensure we can properly detect a recursion error even
     if some locals raise error on comparison (#2459).
     """
-    from _pytest.pytester import LineMatcher
 
     class numpy_like:
         def __eq__(self, other):

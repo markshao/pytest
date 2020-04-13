@@ -1,7 +1,6 @@
 import logging
 
-import py.io
-
+from _pytest._io import TerminalWriter
 from _pytest.logging import ColoredLevelFormatter
 
 
@@ -22,7 +21,7 @@ def test_coloredlogformatter():
         class option:
             pass
 
-    tw = py.io.TerminalWriter()
+    tw = TerminalWriter()
     tw.hasmarkup = True
     formatter = ColoredLevelFormatter(tw, logfmt)
     output = formatter.format(record)
@@ -53,11 +52,75 @@ def test_multiline_message():
     # this is called by logging.Formatter.format
     record.message = record.getMessage()
 
-    style = PercentStyleMultiline(logfmt)
-    output = style.format(record)
+    ai_on_style = PercentStyleMultiline(logfmt, True)
+    output = ai_on_style.format(record)
     assert output == (
         "dummypath                   10 INFO     Test Message line1\n"
         "                                        line2"
+    )
+
+    ai_off_style = PercentStyleMultiline(logfmt, False)
+    output = ai_off_style.format(record)
+    assert output == (
+        "dummypath                   10 INFO     Test Message line1\nline2"
+    )
+
+    ai_none_style = PercentStyleMultiline(logfmt, None)
+    output = ai_none_style.format(record)
+    assert output == (
+        "dummypath                   10 INFO     Test Message line1\nline2"
+    )
+
+    record.auto_indent = False
+    output = ai_on_style.format(record)
+    assert output == (
+        "dummypath                   10 INFO     Test Message line1\nline2"
+    )
+
+    record.auto_indent = True
+    output = ai_off_style.format(record)
+    assert output == (
+        "dummypath                   10 INFO     Test Message line1\n"
+        "                                        line2"
+    )
+
+    record.auto_indent = "False"
+    output = ai_on_style.format(record)
+    assert output == (
+        "dummypath                   10 INFO     Test Message line1\nline2"
+    )
+
+    record.auto_indent = "True"
+    output = ai_off_style.format(record)
+    assert output == (
+        "dummypath                   10 INFO     Test Message line1\n"
+        "                                        line2"
+    )
+
+    # bad string values default to False
+    record.auto_indent = "junk"
+    output = ai_off_style.format(record)
+    assert output == (
+        "dummypath                   10 INFO     Test Message line1\nline2"
+    )
+
+    # anything other than string or int will default to False
+    record.auto_indent = dict()
+    output = ai_off_style.format(record)
+    assert output == (
+        "dummypath                   10 INFO     Test Message line1\nline2"
+    )
+
+    record.auto_indent = "5"
+    output = ai_off_style.format(record)
+    assert output == (
+        "dummypath                   10 INFO     Test Message line1\n     line2"
+    )
+
+    record.auto_indent = 5
+    output = ai_off_style.format(record)
+    assert output == (
+        "dummypath                   10 INFO     Test Message line1\n     line2"
     )
 
 
@@ -78,7 +141,7 @@ def test_colored_short_level():
         class option:
             pass
 
-    tw = py.io.TerminalWriter()
+    tw = TerminalWriter()
     tw.hasmarkup = True
     formatter = ColoredLevelFormatter(tw, logfmt)
     output = formatter.format(record)

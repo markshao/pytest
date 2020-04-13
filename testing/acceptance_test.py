@@ -6,9 +6,11 @@ import types
 import attr
 import py
 
+import _pytest.runner
 import pytest
 from _pytest.compat import importlib_metadata
-from _pytest.main import ExitCode
+from _pytest.config import ExitCode
+from _pytest.monkeypatch import MonkeyPatch
 
 
 def prepend_pythonpath(*dirs):
@@ -104,6 +106,8 @@ class TestGeneralUsage:
 
     @pytest.mark.parametrize("load_cov_early", [True, False])
     def test_early_load_setuptools_name(self, testdir, monkeypatch, load_cov_early):
+        monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD")
+
         testdir.makepyfile(mytestplugin1_module="")
         testdir.makepyfile(mytestplugin2_module="")
         testdir.makepyfile(mycov_module="")
@@ -178,14 +182,20 @@ class TestGeneralUsage:
         p1 = testdir.makepyfile("")
         p2 = testdir.makefile(".pyc", "123")
         result = testdir.runpytest(p1, p2)
-        assert result.ret
-        result.stderr.fnmatch_lines(["*ERROR: not found:*{}".format(p2.basename)])
+        assert result.ret == ExitCode.USAGE_ERROR
+        result.stderr.fnmatch_lines(
+            [
+                "ERROR: not found: {}".format(p2),
+                "(no name {!r} in any of [[][]])".format(str(p2)),
+                "",
+            ]
+        )
 
     @pytest.mark.filterwarnings("default")
-    def test_better_reporting_on_conftest_load_failure(self, testdir, request):
+    def test_better_reporting_on_conftest_load_failure(self, testdir):
         """Show a user-friendly traceback on conftest import failures (#486, #3332)"""
         testdir.makepyfile("")
-        testdir.makeconftest(
+        conftest = testdir.makeconftest(
             """
             def foo():
                 import qwerty
@@ -200,23 +210,20 @@ class TestGeneralUsage:
         """
         )
         result = testdir.runpytest()
-        dirname = request.node.name + "0"
         exc_name = (
             "ModuleNotFoundError" if sys.version_info >= (3, 6) else "ImportError"
         )
-        result.stderr.fnmatch_lines(
-            [
-                "ImportError while loading conftest '*{sep}{dirname}{sep}conftest.py'.".format(
-                    dirname=dirname, sep=os.sep
-                ),
-                "conftest.py:3: in <module>",
-                "    foo()",
-                "conftest.py:2: in foo",
-                "    import qwerty",
-                "E   {}: No module named 'qwerty'".format(exc_name),
-            ]
-        )
+        assert result.stdout.lines == []
+        assert result.stderr.lines == [
+            "ImportError while loading conftest '{}'.".format(conftest),
+            "conftest.py:3: in <module>",
+            "    foo()",
+            "conftest.py:2: in foo",
+            "    import qwerty",
+            "E   {}: No module named 'qwerty'".format(exc_name),
+        ]
 
+    @pytest.mark.filterwarnings("always::pytest.PytestDeprecationWarning")
     def test_early_skip(self, testdir):
         testdir.mkdir("xyz")
         testdir.makeconftest(
@@ -246,7 +253,7 @@ class TestGeneralUsage:
         )
         result = testdir.runpytest()
         assert result.ret == ExitCode.NO_TESTS_COLLECTED
-        assert "should not be seen" not in result.stdout.str()
+        result.stdout.no_fnmatch_line("*should not be seen*")
         assert "stderr42" not in result.stderr.str()
 
     def test_conftest_printing_shows_if_error(self, testdir):
@@ -406,7 +413,7 @@ class TestGeneralUsage:
     def test_report_all_failed_collections_initargs(self, testdir):
         testdir.makeconftest(
             """
-            from _pytest.main import ExitCode
+            from _pytest.config import ExitCode
 
             def pytest_sessionfinish(exitstatus):
                 assert exitstatus == ExitCode.USAGE_ERROR
@@ -458,7 +465,7 @@ class TestGeneralUsage:
         p = testdir.makepyfile(
             """
             def raise_error(obj):
-                raise IOError('source code not available')
+                raise OSError('source code not available')
 
             import inspect
             inspect.getsourcelines = raise_error
@@ -600,9 +607,9 @@ class TestInvocationVariants:
     def test_equivalence_pytest_pytest(self):
         assert pytest.main == py.test.cmdline.main
 
-    def test_invoke_with_invalid_type(self, capsys):
+    def test_invoke_with_invalid_type(self):
         with pytest.raises(
-            TypeError, match="expected to be a list or tuple of strings, got: '-h'"
+            TypeError, match="expected to be a list of strings, got: '-h'"
         ):
             pytest.main("-h")
 
@@ -611,7 +618,7 @@ class TestInvocationVariants:
         assert retcode == ExitCode.NO_TESTS_COLLECTED
         out, err = capsys.readouterr()
 
-    def test_invoke_plugin_api(self, testdir, capsys):
+    def test_invoke_plugin_api(self, capsys):
         class MyPlugin:
             def pytest_addoption(self, parser):
                 parser.addoption("--myopt")
@@ -628,7 +635,7 @@ class TestInvocationVariants:
         result = testdir.runpytest("--pyargs", "tpkg.test_hello", syspathinsert=True)
         assert result.ret != 0
 
-        result.stdout.fnmatch_lines(["collected*0*items*/*1*errors"])
+        result.stdout.fnmatch_lines(["collected*0*items*/*1*error"])
 
     def test_pyargs_only_imported_once(self, testdir):
         pkg = testdir.mkpydir("foo")
@@ -754,7 +761,6 @@ class TestInvocationVariants:
         result = testdir.runpytest(str(p) + "::test", "--doctest-modules")
         result.stdout.fnmatch_lines(["*1 passed*"])
 
-    @pytest.mark.skipif(not hasattr(os, "symlink"), reason="requires symlinks")
     def test_cmdline_python_package_symlink(self, testdir, monkeypatch):
         """
         test --pyargs option with packages with path containing symlink can
@@ -859,16 +865,21 @@ class TestInvocationVariants:
             4
         """,
         )
-        result = testdir.runpytest("-rf")
-        lines = result.stdout.str().splitlines()
-        for line in lines:
-            if line.startswith(("FAIL ", "FAILED ")):
-                _fail, _sep, testid = line.partition(" ")
-                break
-        result = testdir.runpytest(testid, "-rf")
-        result.stdout.fnmatch_lines(
-            ["FAILED test_doctest_id.txt::test_doctest_id.txt", "*1 failed*"]
-        )
+        testid = "test_doctest_id.txt::test_doctest_id.txt"
+        expected_lines = [
+            "*= FAILURES =*",
+            "*_ ?doctest? test_doctest_id.txt _*",
+            "FAILED test_doctest_id.txt::test_doctest_id.txt",
+            "*= 1 failed in*",
+        ]
+        result = testdir.runpytest(testid, "-rf", "--tb=short")
+        result.stdout.fnmatch_lines(expected_lines)
+
+        # Ensure that re-running it will still handle it as
+        # doctest.DocTestFailure, which was not the case before when
+        # re-importing doctest, but not creating a new RUNNER_CLASS.
+        result = testdir.runpytest(testid, "-rf", "--tb=short")
+        result.stdout.fnmatch_lines(expected_lines)
 
     def test_core_backward_compatibility(self):
         """Test backward compatibility for get_plugin_manager function. See #787."""
@@ -884,43 +895,65 @@ class TestInvocationVariants:
         assert request.config.pluginmanager.hasplugin("python")
 
 
+def fake_time(monkeypatch: MonkeyPatch) -> None:
+    """Monkeypatch time functions to make TestDurations not rely on actual time."""
+    import time
+
+    current_time = 1586202699.9859412
+
+    def sleep(seconds: float) -> None:
+        nonlocal current_time
+        current_time += seconds
+
+    monkeypatch.setattr(time, "sleep", sleep)
+    monkeypatch.setattr(_pytest.runner, "time", lambda: current_time)
+    monkeypatch.setattr(_pytest.runner, "perf_counter", lambda: current_time)
+
+
 class TestDurations:
     source = """
         import time
-        frag = 0.002
         def test_something():
             pass
         def test_2():
-            time.sleep(frag*5)
+            time.sleep(0.010)
         def test_1():
-            time.sleep(frag)
+            time.sleep(0.002)
         def test_3():
-            time.sleep(frag*10)
+            time.sleep(0.020)
     """
 
     def test_calls(self, testdir):
         testdir.makepyfile(self.source)
-        result = testdir.runpytest("--durations=10")
+        fake_time(testdir.monkeypatch)
+        result = testdir.runpytest_inprocess("--durations=10")
         assert result.ret == 0
+
         result.stdout.fnmatch_lines_random(
             ["*durations*", "*call*test_3*", "*call*test_2*"]
         )
+
         result.stdout.fnmatch_lines(
-            ["(0.00 durations hidden.  Use -vv to show these durations.)"]
+            ["(8 durations < 0.005s hidden.  Use -vv to show these durations.)"]
         )
 
     def test_calls_show_2(self, testdir):
         testdir.makepyfile(self.source)
-        result = testdir.runpytest("--durations=2")
+        fake_time(testdir.monkeypatch)
+        result = testdir.runpytest_inprocess("--durations=2")
         assert result.ret == 0
+
         lines = result.stdout.get_lines_after("*slowest*durations*")
         assert "4 passed" in lines[2]
 
     def test_calls_showall(self, testdir):
         testdir.makepyfile(self.source)
-        result = testdir.runpytest("--durations=0")
+        fake_time(testdir.monkeypatch)
+        result = testdir.runpytest_inprocess("--durations=0")
         assert result.ret == 0
-        for x in "23":
+
+        tested = "3"
+        for x in tested:
             for y in ("call",):  # 'setup', 'call', 'teardown':
                 for line in result.stdout.lines:
                     if ("test_%s" % x) in line and y in line:
@@ -930,8 +963,10 @@ class TestDurations:
 
     def test_calls_showall_verbose(self, testdir):
         testdir.makepyfile(self.source)
-        result = testdir.runpytest("--durations=0", "-vv")
+        fake_time(testdir.monkeypatch)
+        result = testdir.runpytest_inprocess("--durations=0", "-vv")
         assert result.ret == 0
+
         for x in "123":
             for y in ("call",):  # 'setup', 'call', 'teardown':
                 for line in result.stdout.lines:
@@ -942,43 +977,48 @@ class TestDurations:
 
     def test_with_deselected(self, testdir):
         testdir.makepyfile(self.source)
-        result = testdir.runpytest("--durations=2", "-k test_2")
+        fake_time(testdir.monkeypatch)
+        result = testdir.runpytest_inprocess("--durations=2", "-k test_3")
         assert result.ret == 0
-        result.stdout.fnmatch_lines(["*durations*", "*call*test_2*"])
+
+        result.stdout.fnmatch_lines(["*durations*", "*call*test_3*"])
 
     def test_with_failing_collection(self, testdir):
         testdir.makepyfile(self.source)
+        fake_time(testdir.monkeypatch)
         testdir.makepyfile(test_collecterror="""xyz""")
-        result = testdir.runpytest("--durations=2", "-k test_1")
+        result = testdir.runpytest_inprocess("--durations=2", "-k test_1")
         assert result.ret == 2
-        result.stdout.fnmatch_lines(["*Interrupted: 1 errors during collection*"])
+
+        result.stdout.fnmatch_lines(["*Interrupted: 1 error during collection*"])
         # Collection errors abort test execution, therefore no duration is
         # output
-        assert "duration" not in result.stdout.str()
+        result.stdout.no_fnmatch_line("*duration*")
 
     def test_with_not(self, testdir):
         testdir.makepyfile(self.source)
-        result = testdir.runpytest("-k not 1")
+        fake_time(testdir.monkeypatch)
+        result = testdir.runpytest_inprocess("-k not 1")
         assert result.ret == 0
 
 
-class TestDurationWithFixture:
+class TestDurationsWithFixture:
     source = """
         import pytest
         import time
-        frag = 0.01
 
         @pytest.fixture
         def setup_fixt():
-            time.sleep(frag)
+            time.sleep(0.02)
 
         def test_1(setup_fixt):
-            time.sleep(frag)
+            time.sleep(0.02)
     """
 
     def test_setup_function(self, testdir):
         testdir.makepyfile(self.source)
-        result = testdir.runpytest("--durations=10")
+        fake_time(testdir.monkeypatch)
+        result = testdir.runpytest_inprocess("--durations=10")
         assert result.ret == 0
 
         result.stdout.fnmatch_lines_random(
@@ -1008,7 +1048,7 @@ def test_zipimport_hook(testdir, tmpdir):
     result = testdir.runpython(target)
     assert result.ret == 0
     result.stderr.fnmatch_lines(["*not found*foo*"])
-    assert "INTERNALERROR>" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*INTERNALERROR>*")
 
 
 def test_import_plugin_unicode_name(testdir):
@@ -1238,3 +1278,68 @@ def test_warn_on_async_gen_function(testdir):
     assert (
         result.stdout.str().count("async def functions are not natively supported") == 1
     )
+
+
+def test_pdb_can_be_rewritten(testdir):
+    testdir.makepyfile(
+        **{
+            "conftest.py": """
+                import pytest
+                pytest.register_assert_rewrite("pdb")
+                """,
+            "__init__.py": "",
+            "pdb.py": """
+                def check():
+                    assert 1 == 2
+                """,
+            "test_pdb.py": """
+                def test():
+                    import pdb
+                    assert pdb.check()
+                """,
+        }
+    )
+    # Disable debugging plugin itself to avoid:
+    # > INTERNALERROR> AttributeError: module 'pdb' has no attribute 'set_trace'
+    result = testdir.runpytest_subprocess("-p", "no:debugging", "-vv")
+    result.stdout.fnmatch_lines(
+        [
+            "    def check():",
+            ">       assert 1 == 2",
+            "E       assert 1 == 2",
+            "E         +1",
+            "E         -2",
+            "",
+            "pdb.py:2: AssertionError",
+            "*= 1 failed in *",
+        ]
+    )
+    assert result.ret == 1
+
+
+def test_tee_stdio_captures_and_live_prints(testdir):
+    testpath = testdir.makepyfile(
+        """
+        import sys
+        def test_simple():
+            print ("@this is stdout@")
+            print ("@this is stderr@", file=sys.stderr)
+    """
+    )
+    result = testdir.runpytest_subprocess(
+        testpath,
+        "--capture=tee-sys",
+        "--junitxml=output.xml",
+        "-o",
+        "junit_logging=all",
+    )
+
+    # ensure stdout/stderr were 'live printed'
+    result.stdout.fnmatch_lines(["*@this is stdout@*"])
+    result.stderr.fnmatch_lines(["*@this is stderr@*"])
+
+    # now ensure the output is in the junitxml
+    with open(os.path.join(testdir.tmpdir.strpath, "output.xml"), "r") as f:
+        fullXml = f.read()
+    assert "@this is stdout@\n" in fullXml
+    assert "@this is stderr@\n" in fullXml
