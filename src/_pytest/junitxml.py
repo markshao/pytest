@@ -25,7 +25,6 @@ from _pytest.config import filename_arg
 from _pytest.store import StoreKey
 from _pytest.warnings import _issue_warning_captured
 
-
 xml_key = StoreKey["LogXML"]()
 
 
@@ -99,8 +98,8 @@ class _NodeReporter:
         self.testcase = None
         self.attrs = {}
 
-    def append(self, node):
-        self.xml.add_stats(type(node).__name__)
+    def append(self, node, report=None):
+        self.xml.add_stats(type(node).__name__, report)
         self.nodes.append(node)
 
     def add_property(self, name, value):
@@ -131,10 +130,10 @@ class _NodeReporter:
         attrs = {
             "classname": ".".join(classnames),
             "name": bin_xml_escape(names[-1]),
-            "file": testreport.location[0],
+            # "file": testreport.location[0],
         }
-        if testreport.location[1] is not None:
-            attrs["line"] = testreport.location[1]
+        # if testreport.location[1] is not None:
+        #     attrs["line"] = testreport.location[1]
         if hasattr(testreport, "url"):
             attrs["url"] = testreport.url
         self.attrs = attrs
@@ -159,10 +158,10 @@ class _NodeReporter:
             testcase.append(node)
         return testcase
 
-    def _add_simple(self, kind, message, data=None):
-        data = bin_xml_escape(data)
-        node = kind(data, message=message)
-        self.append(node)
+    def _add_simple(self, kind, message, report):
+        data = bin_xml_escape(report.longrepr)
+        node = kind(report.longrepr, message=message)
+        self.append(node, report)
 
     def write_captured_output(self, report):
         if not self.xml.log_passing_tests and report.passed:
@@ -194,13 +193,13 @@ class _NodeReporter:
         tag = getattr(Junit, jheader)
         self.append(tag(bin_xml_escape(content)))
 
-    def append_pass(self, report):
-        self.add_stats("passed")
+    def append_pass(self, report=None):
+        self.add_stats("passed", report)
 
     def append_failure(self, report):
         # msg = str(report.longrepr.reprtraceback.extraline)
         if hasattr(report, "wasxfail"):
-            self._add_simple(Junit.skipped, "xfail-marked test passes unexpectedly")
+            self._add_simple(Junit.skipped, "xfail-marked test passes unexpectedly", report)
         else:
             if hasattr(report.longrepr, "reprcrash"):
                 message = report.longrepr.reprcrash.message
@@ -211,7 +210,7 @@ class _NodeReporter:
             message = bin_xml_escape(message)
             fail = Junit.failure(message=message)
             fail.append(bin_xml_escape(report.longrepr))
-            self.append(fail)
+            self.append(fail, report)
 
     def append_collect_error(self, report):
         # msg = str(report.longrepr.reprtraceback.extraline)
@@ -220,14 +219,14 @@ class _NodeReporter:
         )
 
     def append_collect_skipped(self, report):
-        self._add_simple(Junit.skipped, "collection skipped", report.longrepr)
+        self._add_simple(Junit.skipped, "collection skipped", report)
 
     def append_error(self, report):
         if report.when == "teardown":
             msg = "test teardown failure"
         else:
             msg = "test setup failure"
-        self._add_simple(Junit.error, msg, report.longrepr)
+        self._add_simple(Junit.error, msg, report)
 
     def append_skipped(self, report):
         if hasattr(report, "wasxfail"):
@@ -237,7 +236,7 @@ class _NodeReporter:
             self.append(
                 Junit.skipped(
                     "", type="pytest.xfail", message=bin_xml_escape(xfailreason)
-                )
+                ), report
             )
         else:
             filename, lineno, skipreason = report.longrepr
@@ -250,7 +249,7 @@ class _NodeReporter:
                     bin_xml_escape(details),
                     type="pytest.skip",
                     message=bin_xml_escape(skipreason),
-                )
+                ), report
             )
             self.write_captured_output(report)
 
@@ -452,14 +451,14 @@ def mangle_test_address(address):
 
 class LogXML:
     def __init__(
-        self,
-        logfile,
-        prefix,
-        suite_name="pytest",
-        logging="no",
-        report_duration="total",
-        family="xunit1",
-        log_passing_tests=True,
+            self,
+            logfile,
+            prefix,
+            suite_name="pytest",
+            logging="no",
+            report_duration="total",
+            family="xunit1",
+            log_passing_tests=True,
     ):
         logfile = os.path.expanduser(os.path.expandvars(logfile))
         self.logfile = os.path.normpath(os.path.abspath(logfile))
@@ -473,10 +472,13 @@ class LogXML:
         self.node_reporters = {}  # nodeid -> _NodeReporter
         self.node_reporters_ordered = []
         self.global_properties = []
+        self.file_to_node_report = {}  # file ->  _NodeReporter
+        self.file_to_stats = {}  # file -> stats
 
         # List of reports that failed on call but teardown is pending.
         self.open_reports = []
         self.cnt_double_fail_tests = 0
+        self.file_to_cnt_double_fail_tests = {}
 
         # Replaces convenience family with real family
         if self.family == "legacy":
@@ -506,11 +508,23 @@ class LogXML:
         self.node_reporters[key] = reporter
         self.node_reporters_ordered.append(reporter)
 
+        if getattr(report, "location", None):
+            file = report.location[0]
+            if file not in self.file_to_node_report:
+                self.file_to_node_report[file] = [reporter]
+            else:
+                self.file_to_node_report[file].append(reporter)
+
         return reporter
 
-    def add_stats(self, key):
+    def add_stats(self, key, report=None):
         if key in self.stats:
             self.stats[key] += 1
+        if report:
+            file = report.location[0]
+            if file not in self.file_to_stats:
+                self.file_to_stats[file] = dict.fromkeys(["error", "passed", "failure", "skipped"], 0)
+            self.file_to_stats[file][key] += 1
 
     def _opentestcase(self, report):
         reporter = self.node_reporter(report)
@@ -558,7 +572,7 @@ class LogXML:
                             rep.nodeid == report.nodeid
                             and getattr(rep, "item_index", None) == report_ii
                             and getattr(rep, "worker_id", None) == report_wid
-                        )
+                    )
                     ),
                     None,
                 )
@@ -568,6 +582,12 @@ class LogXML:
                     # schema
                     self.finalize(close_report)
                     self.cnt_double_fail_tests += 1
+
+                    file = report.location[0]
+                    if file not in self.file_to_cnt_double_fail_tests:
+                        self.file_to_cnt_double_fail_tests[file] = 0
+                    self.file_to_cnt_double_fail_tests[file] += 1
+
             reporter = self._opentestcase(report)
             if report.when == "call":
                 reporter.append_failure(report)
@@ -598,7 +618,7 @@ class LogXML:
                         rep.nodeid == report.nodeid
                         and getattr(rep, "item_index", None) == report_ii
                         and getattr(rep, "worker_id", None) == report_wid
-                    )
+                )
                 ),
                 None,
             )
@@ -637,28 +657,33 @@ class LogXML:
         suite_stop_time = time.time()
         suite_time_delta = suite_stop_time - self.suite_start_time
 
-        numtests = (
-            self.stats["passed"]
-            + self.stats["failure"]
-            + self.stats["skipped"]
-            + self.stats["error"]
-            - self.cnt_double_fail_tests
-        )
         logfile.write('<?xml version="1.0" encoding="utf-8"?>')
-
-        suite_node = Junit.testsuite(
-            self._get_global_properties_node(),
-            [x.to_xml() for x in self.node_reporters_ordered],
-            name=self.suite_name,
-            errors=self.stats["error"],
-            failures=self.stats["failure"],
-            skipped=self.stats["skipped"],
-            tests=numtests,
-            time="%.3f" % suite_time_delta,
-            timestamp=datetime.fromtimestamp(self.suite_start_time).isoformat(),
-            hostname=platform.node(),
-        )
-        logfile.write(Junit.testsuites([suite_node]).unicode(indent=0))
+        suite_nodes = []
+        print(self.file_to_node_report)
+        print(self.file_to_stats)
+        for file, node_reporters in self.file_to_node_report.items():
+            numtests = (
+                    self.file_to_stats[file].get("passed", 0)
+                    + self.file_to_stats[file].get("failure", 0)
+                    + self.file_to_stats[file].get("skipped", 0)
+                    + self.file_to_stats[file].get("error", 0)
+                    - self.file_to_cnt_double_fail_tests.get(file, 0)
+            )
+            suite_node = Junit.testsuite(
+                self._get_global_properties_node(),
+                [x.to_xml() for x in node_reporters],
+                name=self.suite_name,
+                errors=self.file_to_stats[file]["error"],
+                failures=self.file_to_stats[file]["failure"],
+                skipped=self.file_to_stats[file]["skipped"],
+                tests=numtests,
+                time="%.3f" % suite_time_delta,
+                timestamp=datetime.fromtimestamp(self.suite_start_time).isoformat(),
+                hostname=platform.node(),
+                file=file
+            )
+            suite_nodes.append(suite_node)
+        logfile.write(Junit.testsuites(suite_nodes).unicode(indent=0))
         logfile.close()
 
     def pytest_terminal_summary(self, terminalreporter):

@@ -221,7 +221,7 @@ class TestPython:
 
     @pytest.mark.parametrize("duration_report", ["call", "total"])
     def test_junit_duration_report(
-        self, testdir, monkeypatch, duration_report, run_and_parse
+            self, testdir, monkeypatch, duration_report, run_and_parse
     ):
 
         # mock LogXML.node_reporter so it always sets a known duration to each test report object
@@ -365,7 +365,7 @@ class TestPython:
 
     @parametrize_families
     def test_mark_skipif_contains_name_reason(
-        self, testdir, run_and_parse, xunit_family
+            self, testdir, run_and_parse, xunit_family
     ):
         testdir.makepyfile(
             """
@@ -389,7 +389,7 @@ class TestPython:
 
     @parametrize_families
     def test_mark_skip_doesnt_capture_output(
-        self, testdir, run_and_parse, xunit_family
+            self, testdir, run_and_parse, xunit_family
     ):
         testdir.makepyfile(
             """
@@ -452,7 +452,7 @@ class TestPython:
     )
     @parametrize_families
     def test_failure_function(
-        self, testdir, junit_logging, run_and_parse, xunit_family
+            self, testdir, junit_logging, run_and_parse, xunit_family
     ):
         testdir.makepyfile(
             """
@@ -492,7 +492,7 @@ class TestPython:
             assert systemout.tag == "system-out", "Expected tag: system-out"
             assert "info msg" not in systemout_xml, "INFO message found in system-out"
             assert (
-                "hello-stdout" in systemout_xml
+                    "hello-stdout" in systemout_xml
             ), "Missing 'hello-stdout' in system-out"
         if junit_logging in ["system-err", "out-err", "all"]:
             systemerr = tnode.find_first_by_tag("system-err")
@@ -500,10 +500,10 @@ class TestPython:
             assert systemerr.tag == "system-err", "Expected tag: system-err"
             assert "info msg" not in systemerr_xml, "INFO message found in system-err"
             assert (
-                "hello-stderr" in systemerr_xml
+                    "hello-stderr" in systemerr_xml
             ), "Missing 'hello-stderr' in system-err"
             assert (
-                "warning msg" not in systemerr_xml
+                    "warning msg" not in systemerr_xml
             ), "WARN message found in system-err"
         if junit_logging == "no":
             assert not tnode.find_by_tag("log"), "Found unexpected content: log"
@@ -548,7 +548,6 @@ class TestPython:
         node.assert_attr(failures=3, tests=3)
 
         for index, char in enumerate("<&'"):
-
             tnode = node.find_nth_by_tag("testcase", index)
             tnode.assert_attr(
                 classname="test_failure_escape", name="test_func[%s]" % char
@@ -743,7 +742,7 @@ class TestPython:
         if junit_logging == "system-out":
             systemout = pnode.find_first_by_tag("system-out")
             assert (
-                "hello-stdout" in systemout.toxml()
+                    "hello-stdout" in systemout.toxml()
             ), "'hello-stdout' should be in system-out"
 
     @pytest.mark.parametrize("junit_logging", ["no", "system-err"])
@@ -765,7 +764,7 @@ class TestPython:
         if junit_logging == "system-err":
             systemerr = pnode.find_first_by_tag("system-err")
             assert (
-                "hello-stderr" in systemerr.toxml()
+                    "hello-stderr" in systemerr.toxml()
             ), "'hello-stderr' should be in system-err"
 
     @pytest.mark.parametrize("junit_logging", ["no", "system-out"])
@@ -792,7 +791,7 @@ class TestPython:
         if junit_logging == "system-out":
             systemout = pnode.find_first_by_tag("system-out")
             assert (
-                "hello-stdout" in systemout.toxml()
+                    "hello-stdout" in systemout.toxml()
             ), "'hello-stdout' should be in system-out"
 
     @pytest.mark.parametrize("junit_logging", ["no", "system-err"])
@@ -820,7 +819,7 @@ class TestPython:
         if junit_logging == "system-err":
             systemerr = pnode.find_first_by_tag("system-err")
             assert (
-                "hello-stderr" in systemerr.toxml()
+                    "hello-stderr" in systemerr.toxml()
             ), "'hello-stderr' should be in system-err"
 
     @pytest.mark.parametrize("junit_logging", ["no", "system-out"])
@@ -1191,8 +1190,9 @@ def test_record_attribute(testdir, run_and_parse):
     """
     )
     result, dom = run_and_parse()
-    node = dom.find_first_by_tag("testsuite")
-    tnode = node.find_first_by_tag("testcase")
+    node = dom.find_first_by_tag("testsuites")
+    snode = node.find_first_by_tag("testsuite")
+    tnode = snode.find_first_by_tag("testcase")
     tnode.assert_attr(bar="1")
     tnode.assert_attr(foo="<1")
     result.stdout.fnmatch_lines(
@@ -1419,7 +1419,7 @@ def test_url_property(testdir):
     test_case = minidom.parse(str(path)).getElementsByTagName("testcase")[0]
 
     assert (
-        test_case.getAttribute("url") == test_url
+            test_case.getAttribute("url") == test_url
     ), "The URL did not get written to the xml"
 
 
@@ -1519,7 +1519,7 @@ def test_escaped_skipreason_issue3533(testdir, run_and_parse):
 
 @parametrize_families
 def test_logging_passing_tests_disabled_does_not_log_test_output(
-    testdir, run_and_parse, xunit_family
+        testdir, run_and_parse, xunit_family
 ):
     testdir.makeini(
         """
@@ -1553,7 +1553,7 @@ def test_logging_passing_tests_disabled_does_not_log_test_output(
 @parametrize_families
 @pytest.mark.parametrize("junit_logging", ["no", "system-out", "system-err"])
 def test_logging_passing_tests_disabled_logs_output_for_failing_test_issue5430(
-    testdir, junit_logging, run_and_parse, xunit_family
+        testdir, junit_logging, run_and_parse, xunit_family
 ):
     testdir.makeini(
         """
