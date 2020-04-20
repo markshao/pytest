@@ -215,7 +215,7 @@ class _NodeReporter:
     def append_collect_error(self, report):
         # msg = str(report.longrepr.reprtraceback.extraline)
         self.append(
-            Junit.error(bin_xml_escape(report.longrepr), message="collection failure")
+            Junit.error(bin_xml_escape(report.longrepr), message="collection failure"), report
         )
 
     def append_collect_skipped(self, report):
