@@ -1,19 +1,16 @@
+# mypy: allow-untyped-defs
 import atexit
 import contextlib
-import fnmatch
-import importlib.util
-import itertools
-import os
-import shutil
-import sys
-import uuid
-import warnings
 from enum import Enum
 from errno import EBADF
 from errno import ELOOP
 from errno import ENOENT
 from errno import ENOTDIR
+import fnmatch
 from functools import partial
+import importlib.util
+import itertools
+import os
 from os.path import expanduser
 from os.path import expandvars
 from os.path import isabs
@@ -21,19 +18,28 @@ from os.path import sep
 from pathlib import Path
 from pathlib import PurePath
 from posixpath import sep as posix_sep
+import shutil
+import sys
+import types
 from types import ModuleType
 from typing import Callable
 from typing import Dict
 from typing import Iterable
 from typing import Iterator
+from typing import List
 from typing import Optional
 from typing import Set
+from typing import Tuple
+from typing import Type
 from typing import TypeVar
 from typing import Union
+import uuid
+import warnings
 
 from _pytest.compat import assert_never
 from _pytest.outcomes import skip
 from _pytest.warning_types import PytestWarning
+
 
 LOCK_TIMEOUT = 60 * 60 * 24 * 3
 
@@ -63,21 +69,33 @@ def get_lock_path(path: _AnyPurePath) -> _AnyPurePath:
     return path.joinpath(".lock")
 
 
-def on_rm_rf_error(func, path: str, exc, *, start_path: Path) -> bool:
+def on_rm_rf_error(
+    func,
+    path: str,
+    excinfo: Union[
+        BaseException,
+        Tuple[Type[BaseException], BaseException, Optional[types.TracebackType]],
+    ],
+    *,
+    start_path: Path,
+) -> bool:
     """Handle known read-only errors during rmtree.
 
     The returned value is used only by our own tests.
     """
-    exctype, excvalue = exc[:2]
+    if isinstance(excinfo, BaseException):
+        exc = excinfo
+    else:
+        exc = excinfo[1]
 
     # Another process removed the file in the middle of the "rm_rf" (xdist for example).
     # More context: https://github.com/pytest-dev/pytest/issues/5974#issuecomment-543799018
-    if isinstance(excvalue, FileNotFoundError):
+    if isinstance(exc, FileNotFoundError):
         return False
 
-    if not isinstance(excvalue, PermissionError):
+    if not isinstance(exc, PermissionError):
         warnings.warn(
-            PytestWarning(f"(rm_rf) error removing {path}\n{exctype}: {excvalue}")
+            PytestWarning(f"(rm_rf) error removing {path}\n{type(exc)}: {exc}")
         )
         return False
 
@@ -85,9 +103,7 @@ def on_rm_rf_error(func, path: str, exc, *, start_path: Path) -> bool:
         if func not in (os.open,):
             warnings.warn(
                 PytestWarning(
-                    "(rm_rf) unknown function {} when removing {}:\n{}: {}".format(
-                        func, path, exctype, excvalue
-                    )
+                    f"(rm_rf) unknown function {func} when removing {path}:\n{type(exc)}: {exc}"
                 )
             )
         return False
@@ -149,26 +165,29 @@ def rm_rf(path: Path) -> None:
     are read-only."""
     path = ensure_extended_length_path(path)
     onerror = partial(on_rm_rf_error, start_path=path)
-    shutil.rmtree(str(path), onerror=onerror)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(str(path), onexc=onerror)
+    else:
+        shutil.rmtree(str(path), onerror=onerror)
 
 
-def find_prefixed(root: Path, prefix: str) -> Iterator[Path]:
+def find_prefixed(root: Path, prefix: str) -> Iterator["os.DirEntry[str]"]:
     """Find all elements in root that begin with the prefix, case insensitive."""
     l_prefix = prefix.lower()
-    for x in root.iterdir():
+    for x in os.scandir(root):
         if x.name.lower().startswith(l_prefix):
             yield x
 
 
-def extract_suffixes(iter: Iterable[PurePath], prefix: str) -> Iterator[str]:
+def extract_suffixes(iter: Iterable["os.DirEntry[str]"], prefix: str) -> Iterator[str]:
     """Return the parts of the paths following the prefix.
 
     :param iter: Iterator over path names.
     :param prefix: Expected prefix of the path names.
     """
     p_len = len(prefix)
-    for p in iter:
-        yield p.name[p_len:]
+    for entry in iter:
+        yield entry.name[p_len:]
 
 
 def find_suffixes(root: Path, prefix: str) -> Iterator[str]:
@@ -223,7 +242,7 @@ def make_numbered_dir(root: Path, prefix: str, mode: int = 0o700) -> Path:
     else:
         raise OSError(
             "could not create numbered dir with prefix "
-            "{prefix} in {root} after 10 tries".format(prefix=prefix, root=root)
+            f"{prefix} in {root} after 10 tries"
         )
 
 
@@ -327,15 +346,15 @@ def cleanup_candidates(root: Path, prefix: str, keep: int) -> Iterator[Path]:
     """List candidates for numbered directories to be removed - follows py.path."""
     max_existing = max(map(parse_num, find_suffixes(root, prefix)), default=-1)
     max_delete = max_existing - keep
-    paths = find_prefixed(root, prefix)
-    paths, paths2 = itertools.tee(paths)
-    numbers = map(parse_num, extract_suffixes(paths2, prefix))
-    for path, number in zip(paths, numbers):
+    entries = find_prefixed(root, prefix)
+    entries, entries2 = itertools.tee(entries)
+    numbers = map(parse_num, extract_suffixes(entries2, prefix))
+    for entry, number in zip(entries, numbers):
         if number <= max_delete:
-            yield path
+            yield Path(entry)
 
 
-def cleanup_dead_symlink(root: Path):
+def cleanup_dead_symlinks(root: Path):
     for left_dir in root.iterdir():
         if left_dir.is_symlink():
             if not left_dir.resolve().exists():
@@ -353,7 +372,7 @@ def cleanup_numbered_dir(
     for path in root.glob("garbage-*"):
         try_cleanup(path, consider_lock_dead_if_created_before)
 
-    cleanup_dead_symlink(root)
+    cleanup_dead_symlinks(root)
 
 
 def make_numbered_dir_with_cleanup(
@@ -504,6 +523,8 @@ def import_path(
 
     if mode is ImportMode.importlib:
         module_name = module_name_from_path(path, root)
+        with contextlib.suppress(KeyError):
+            return sys.modules[module_name]
 
         for meta_importer in sys.meta_path:
             spec = meta_importer.find_spec(module_name, [str(path.parent)])
@@ -602,6 +623,11 @@ def module_name_from_path(path: Path, root: Path) -> str:
         # Use the parts for the relative path to the root path.
         path_parts = relative_path.parts
 
+    # Module name for packages do not contain the __init__ file, unless
+    # the `__init__.py` file is at the root.
+    if len(path_parts) >= 2 and path_parts[-1] == "__init__":
+        path_parts = path_parts[:-1]
+
     return ".".join(path_parts)
 
 
@@ -614,6 +640,9 @@ def insert_missing_modules(modules: Dict[str, ModuleType], module_name: str) -> 
     otherwise "src.tests.test_foo" is not importable by ``__import__``.
     """
     module_parts = module_name.split(".")
+    child_module: Union[ModuleType, None] = None
+    module: Union[ModuleType, None] = None
+    child_name: str = ""
     while module_name:
         if module_name not in modules:
             try:
@@ -623,13 +652,22 @@ def insert_missing_modules(modules: Dict[str, ModuleType], module_name: str) -> 
                 # ourselves to fall back to creating a dummy module.
                 if not sys.meta_path:
                     raise ModuleNotFoundError
-                importlib.import_module(module_name)
+                module = importlib.import_module(module_name)
             except ModuleNotFoundError:
                 module = ModuleType(
                     module_name,
                     doc="Empty module created by pytest's importmode=importlib.",
                 )
+        else:
+            module = modules[module_name]
+        if child_module:
+            # Add child attribute to the parent that can reference the child
+            # modules.
+            if not hasattr(module, child_name):
+                setattr(module, child_name, child_module)
                 modules[module_name] = module
+        # Keep track of the child module while moving up the tree.
+        child_module, child_name = module, module_name.rpartition(".")[-1]
         module_parts.pop(-1)
         module_name = ".".join(module_parts)
 
@@ -643,7 +681,7 @@ def resolve_package_path(path: Path) -> Optional[Path]:
     result = None
     for parent in itertools.chain((path,), path.parents):
         if parent.is_dir():
-            if not parent.joinpath("__init__.py").is_file():
+            if not (parent / "__init__.py").is_file():
                 break
             if not parent.name.isidentifier():
                 break
@@ -651,30 +689,42 @@ def resolve_package_path(path: Path) -> Optional[Path]:
     return result
 
 
+def scandir(
+    path: Union[str, "os.PathLike[str]"],
+    sort_key: Callable[["os.DirEntry[str]"], object] = lambda entry: entry.name,
+) -> List["os.DirEntry[str]"]:
+    """Scan a directory recursively, in breadth-first order.
+
+    The returned entries are sorted according to the given key.
+    The default is to sort by name.
+    """
+    entries = []
+    with os.scandir(path) as s:
+        # Skip entries with symlink loops and other brokenness, so the caller
+        # doesn't have to deal with it.
+        for entry in s:
+            try:
+                entry.is_file()
+            except OSError as err:
+                if _ignore_error(err):
+                    continue
+                raise
+            entries.append(entry)
+    entries.sort(key=sort_key)  # type: ignore[arg-type]
+    return entries
+
+
 def visit(
     path: Union[str, "os.PathLike[str]"], recurse: Callable[["os.DirEntry[str]"], bool]
 ) -> Iterator["os.DirEntry[str]"]:
     """Walk a directory recursively, in breadth-first order.
 
+    The `recurse` predicate determines whether a directory is recursed.
+
     Entries at each directory level are sorted.
     """
-
-    # Skip entries with symlink loops and other brokenness, so the caller doesn't
-    # have to deal with it.
-    entries = []
-    for entry in os.scandir(path):
-        try:
-            entry.is_file()
-        except OSError as err:
-            if _ignore_error(err):
-                continue
-            raise
-        entries.append(entry)
-
-    entries.sort(key=lambda entry: entry.name)
-
+    entries = scandir(path)
     yield from entries
-
     for entry in entries:
         if entry.is_dir() and recurse(entry):
             yield from visit(entry.path, recurse)
@@ -730,19 +780,11 @@ def bestrelpath(directory: Path, dest: Path) -> str:
     )
 
 
-# Originates from py. path.local.copy(), with siginficant trims and adjustments.
-# TODO(py38): Replace with shutil.copytree(..., symlinks=True, dirs_exist_ok=True)
-def copytree(source: Path, target: Path) -> None:
-    """Recursively copy a source directory to target."""
-    assert source.is_dir()
-    for entry in visit(source, recurse=lambda entry: not entry.is_symlink()):
-        x = Path(entry)
-        relpath = x.relative_to(source)
-        newx = target / relpath
-        newx.parent.mkdir(exist_ok=True)
-        if x.is_symlink():
-            newx.symlink_to(os.readlink(x))
-        elif x.is_file():
-            shutil.copyfile(x, newx)
-        elif x.is_dir():
-            newx.mkdir(exist_ok=True)
+def safe_exists(p: Path) -> bool:
+    """Like Path.exists(), but account for input arguments that might be too long (#11394)."""
+    try:
+        return p.exists()
+    except (ValueError, OSError):
+        # ValueError: stat: path too long for Windows
+        # OSError: [WinError 123] The filename, directory name, or volume label syntax is incorrect
+        return False

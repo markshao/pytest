@@ -1,10 +1,11 @@
+# mypy: allow-untyped-defs
 from pathlib import Path
 
-import pytest
 from _pytest.cacheprovider import Cache
 from _pytest.monkeypatch import MonkeyPatch
 from _pytest.pytester import Pytester
 from _pytest.stepwise import STEPWISE_CACHE_DIR
+import pytest
 
 
 @pytest.fixture
@@ -352,6 +353,6 @@ def test_one():
     assert result.ret == 0
 
     assert Path(stepwise_cache_file).exists()
-    with stepwise_cache_file.open() as file_handle:
+    with stepwise_cache_file.open(encoding="utf-8") as file_handle:
         observed_value = file_handle.readlines()
     assert [expected_value] == observed_value

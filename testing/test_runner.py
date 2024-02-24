@@ -1,15 +1,15 @@
+# mypy: allow-untyped-defs
+from functools import partial
 import inspect
 import os
+from pathlib import Path
 import sys
 import types
-from functools import partial
-from pathlib import Path
 from typing import Dict
 from typing import List
 from typing import Tuple
 from typing import Type
 
-import pytest
 from _pytest import outcomes
 from _pytest import reports
 from _pytest import runner
@@ -19,6 +19,8 @@ from _pytest.config import ExitCode
 from _pytest.monkeypatch import MonkeyPatch
 from _pytest.outcomes import OutcomeException
 from _pytest.pytester import Pytester
+import pytest
+
 
 if sys.version_info[:2] < (3, 11):
     from exceptiongroup import ExceptionGroup
@@ -542,10 +544,10 @@ def test_runtest_in_module_ordering(pytester: Pytester) -> None:
             @pytest.fixture
             def mylist(self, request):
                 return request.function.mylist
-            @pytest.hookimpl(hookwrapper=True)
+            @pytest.hookimpl(wrapper=True)
             def pytest_runtest_call(self, item):
                 try:
-                    (yield).get_result()
+                    yield
                 except ValueError:
                     pass
             def test_hello1(self, mylist):
@@ -826,12 +828,12 @@ def test_unicode_in_longrepr(pytester: Pytester) -> None:
     pytester.makeconftest(
         """\
         import pytest
-        @pytest.hookimpl(hookwrapper=True)
+        @pytest.hookimpl(wrapper=True)
         def pytest_runtest_makereport():
-            outcome = yield
-            rep = outcome.get_result()
+            rep = yield
             if rep.when == "call":
                 rep.longrepr = 'ä'
+            return rep
         """
     )
     pytester.makepyfile(
@@ -924,6 +926,9 @@ def test_store_except_info_on_error() -> None:
     # Check that exception info is stored on sys
     assert sys.last_type is IndexError
     assert isinstance(sys.last_value, IndexError)
+    if sys.version_info >= (3, 12, 0):
+        assert isinstance(sys.last_exc, IndexError)  # type: ignore[attr-defined]
+
     assert sys.last_value.args[0] == "TEST"
     assert sys.last_traceback
 
@@ -932,6 +937,8 @@ def test_store_except_info_on_error() -> None:
     runner.pytest_runtest_call(ItemMightRaise())  # type: ignore[arg-type]
     assert not hasattr(sys, "last_type")
     assert not hasattr(sys, "last_value")
+    if sys.version_info >= (3, 12, 0):
+        assert not hasattr(sys, "last_exc")
     assert not hasattr(sys, "last_traceback")
 
 
@@ -1006,7 +1013,7 @@ class TestReportContents:
         )
         rec = pytester.inline_run()
         calls = rec.getcalls("pytest_collectreport")
-        _, call = calls
+        _, call, _ = calls
         assert isinstance(call.report.longrepr, tuple)
         assert "Skipped" in call.report.longreprtext
 

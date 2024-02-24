@@ -1,22 +1,21 @@
+# mypy: allow-untyped-defs
 """Terminal reporting of the full testing process."""
-import collections
+from io import StringIO
 import os
+from pathlib import Path
 import sys
 import textwrap
-from io import StringIO
-from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from typing import Dict
 from typing import List
+from typing import NamedTuple
 from typing import Tuple
 
 import pluggy
 
-import _pytest.config
-import _pytest.terminal
-import pytest
 from _pytest._io.wcwidth import wcswidth
+import _pytest.config
 from _pytest.config import Config
 from _pytest.config import ExitCode
 from _pytest.monkeypatch import MonkeyPatch
@@ -24,6 +23,7 @@ from _pytest.pytester import Pytester
 from _pytest.reports import BaseReport
 from _pytest.reports import CollectReport
 from _pytest.reports import TestReport
+import _pytest.terminal
 from _pytest.terminal import _folded_skips
 from _pytest.terminal import _format_trimmed
 from _pytest.terminal import _get_line_with_reprcrash_message
@@ -31,8 +31,12 @@ from _pytest.terminal import _get_raw_skip_reason
 from _pytest.terminal import _plugin_nameversions
 from _pytest.terminal import getreportopt
 from _pytest.terminal import TerminalReporter
+import pytest
 
-DistInfo = collections.namedtuple("DistInfo", ["project_name", "version"])
+
+class DistInfo(NamedTuple):
+    project_name: str
+    version: int
 
 
 TRANS_FNMATCH = str.maketrans({"[": "[[]", "]": "[]]"})
@@ -155,7 +159,6 @@ class TestTerminal:
         self, pytester: Pytester, monkeypatch: MonkeyPatch
     ) -> None:
         """Test for "collecting" being updated after 0.5s"""
-
         pytester.makepyfile(
             **{
                 "test1.py": """
@@ -244,7 +247,8 @@ class TestTerminal:
                     def test_method(self):
                         pass
                 """
-            )
+            ),
+            encoding="utf-8",
         )
         result = pytester.runpytest("-vv")
         assert result.ret == 0
@@ -387,13 +391,13 @@ class TestTerminal:
                 pytest.xfail("It's 🕙 o'clock")
 
             @pytest.mark.skip(
-                reason="cannot do foobar because baz is missing due to I don't know what"
+                reason="1 cannot do foobar because baz is missing due to I don't know what"
             )
             def test_long_skip():
                 pass
 
             @pytest.mark.xfail(
-                reason="cannot do foobar because baz is missing due to I don't know what"
+                reason="2 cannot do foobar because baz is missing due to I don't know what"
             )
             def test_long_xfail():
                 print(1 / 0)
@@ -415,25 +419,23 @@ class TestTerminal:
 
         result = pytester.runpytest("-v")
         result.stdout.fnmatch_lines(
-            common_output
-            + [
-                "test_verbose_skip_reason.py::test_long_skip SKIPPED (cannot *...) *",
-                "test_verbose_skip_reason.py::test_long_xfail XFAIL (cannot *...) *",
+            [
+                *common_output,
+                "test_verbose_skip_reason.py::test_long_skip SKIPPED (1 cannot *...) *",
+                "test_verbose_skip_reason.py::test_long_xfail XFAIL (2 cannot *...) *",
             ]
         )
 
         result = pytester.runpytest("-vv")
         result.stdout.fnmatch_lines(
-            common_output
-            + [
-                (
-                    "test_verbose_skip_reason.py::test_long_skip SKIPPED"
-                    " (cannot do foobar because baz is missing due to I don't know what) *"
-                ),
-                (
-                    "test_verbose_skip_reason.py::test_long_xfail XFAIL"
-                    " (cannot do foobar because baz is missing due to I don't know what) *"
-                ),
+            [
+                *common_output,
+                "test_verbose_skip_reason.py::test_long_skip SKIPPED"
+                " (1 cannot do foobar",
+                "because baz is missing due to I don't know what) *",
+                "test_verbose_skip_reason.py::test_long_xfail XFAIL"
+                " (2 cannot do foobar",
+                "because baz is missing due to I don't know what) *",
             ]
         )
 
@@ -448,7 +450,11 @@ class TestCollectonly:
         )
         result = pytester.runpytest("--collect-only")
         result.stdout.fnmatch_lines(
-            ["<Module test_collectonly_basic.py>", "  <Function test_func>"]
+            [
+                "<Dir test_collectonly_basic0>",
+                "  <Module test_collectonly_basic.py>",
+                "    <Function test_func>",
+            ]
         )
 
     def test_collectonly_skipped_module(self, pytester: Pytester) -> None:
@@ -477,14 +483,15 @@ class TestCollectonly:
         result = pytester.runpytest("--collect-only", "--verbose")
         result.stdout.fnmatch_lines(
             [
-                "<YamlFile test1.yaml>",
-                "  <YamlItem test1.yaml>",
-                "<Module test_collectonly_displays_test_description.py>",
-                "  <Function test_with_description>",
-                "    This test has a description.",
-                "    ",
-                "    more1.",
-                "      more2.",
+                "<Dir test_collectonly_displays_test_description0>",
+                "  <YamlFile test1.yaml>",
+                "    <YamlItem test1.yaml>",
+                "  <Module test_collectonly_displays_test_description.py>",
+                "    <Function test_with_description>",
+                "      This test has a description.",
+                "      ",
+                "      more1.",
+                "        more2.",
             ],
             consecutive=True,
         )
@@ -722,12 +729,12 @@ class TestTerminalFunctional:
         )
         assert result.ret == 0
 
-    def test_deselected_with_hookwrapper(self, pytester: Pytester) -> None:
+    def test_deselected_with_hook_wrapper(self, pytester: Pytester) -> None:
         pytester.makeconftest(
             """
             import pytest
 
-            @pytest.hookimpl(hookwrapper=True)
+            @pytest.hookimpl(wrapper=True)
             def pytest_collection_modifyitems(config, items):
                 yield
                 deselected = items.pop()
@@ -860,13 +867,7 @@ class TestTerminalFunctional:
         result.stdout.fnmatch_lines(
             [
                 "*===== test session starts ====*",
-                "platform %s -- Python %s*pytest-%s**pluggy-%s"
-                % (
-                    sys.platform,
-                    verinfo,
-                    pytest.__version__,
-                    pluggy.__version__,
-                ),
+                f"platform {sys.platform} -- Python {verinfo}*pytest-{pytest.__version__}**pluggy-{pluggy.__version__}",
                 "*test_header_trailer_info.py .*",
                 "=* 1 passed*in *.[0-9][0-9]s *=",
             ]
@@ -887,13 +888,7 @@ class TestTerminalFunctional:
         result = pytester.runpytest("--no-header")
         verinfo = ".".join(map(str, sys.version_info[:3]))
         result.stdout.no_fnmatch_line(
-            "platform %s -- Python %s*pytest-%s**pluggy-%s"
-            % (
-                sys.platform,
-                verinfo,
-                pytest.__version__,
-                pluggy.__version__,
-            )
+            f"platform {sys.platform} -- Python {verinfo}*pytest-{pytest.__version__}**pluggy-{pluggy.__version__}"
         )
         if request.config.pluginmanager.list_plugin_distinfo():
             result.stdout.no_fnmatch_line("plugins: *")
@@ -934,12 +929,10 @@ class TestTerminalFunctional:
         tests = pytester.path.joinpath("tests")
         tests.mkdir()
         pytester.makepyprojecttoml(
-            """
+            f"""
             [tool.pytest.ini_options]
-            testpaths = ['{}']
-        """.format(
-                tests
-            )
+            testpaths = ['{tests}']
+        """
         )
         result = pytester.runpytest()
         result.stdout.fnmatch_lines(
@@ -1265,13 +1258,13 @@ def test_color_yes(pytester: Pytester, color_mapping) -> None:
                 "=*= FAILURES =*=",
                 "{red}{bold}_*_ test_this _*_{reset}",
                 "",
-                "    {kw}def{hl-reset} {function}test_this{hl-reset}():{endline}",
+                "    {reset}{kw}def{hl-reset} {function}test_this{hl-reset}():{endline}",
                 ">       fail(){endline}",
                 "",
                 "{bold}{red}test_color_yes.py{reset}:5: ",
                 "_ _ * _ _*",
                 "",
-                "    {kw}def{hl-reset} {function}fail{hl-reset}():{endline}",
+                "    {reset}{kw}def{hl-reset} {function}fail{hl-reset}():{endline}",
                 ">       {kw}assert{hl-reset} {number}0{hl-reset}{endline}",
                 "{bold}{red}E       assert 0{reset}",
                 "",
@@ -1292,9 +1285,9 @@ def test_color_yes(pytester: Pytester, color_mapping) -> None:
                 "=*= FAILURES =*=",
                 "{red}{bold}_*_ test_this _*_{reset}",
                 "{bold}{red}test_color_yes.py{reset}:5: in test_this",
-                "    fail(){endline}",
+                "    {reset}fail(){endline}",
                 "{bold}{red}test_color_yes.py{reset}:2: in fail",
-                "    {kw}assert{hl-reset} {number}0{hl-reset}{endline}",
+                "    {reset}{kw}assert{hl-reset} {number}0{hl-reset}{endline}",
                 "{bold}{red}E   assert 0{reset}",
                 "{red}=*= {red}{bold}1 failed{reset}{red} in *s{reset}{red} =*={reset}",
             ]
@@ -1539,6 +1532,19 @@ class TestGenericReporting:
         s = result.stdout.str()
         assert "def test_func2" not in s
 
+    def test_tb_crashline_pytrace_false(self, pytester: Pytester, option) -> None:
+        p = pytester.makepyfile(
+            """
+            import pytest
+            def test_func1():
+                pytest.fail('test_func1', pytrace=False)
+        """
+        )
+        result = pytester.runpytest("--tb=line")
+        result.stdout.str()
+        bn = p.name
+        result.stdout.fnmatch_lines(["*%s:3: Failed: test_func1" % bn])
+
     def test_pytest_report_header(self, pytester: Pytester, option) -> None:
         pytester.makeconftest(
             """
@@ -1552,7 +1558,8 @@ class TestGenericReporting:
             """
 def pytest_report_header(config, start_path):
     return ["line1", str(start_path)]
-"""
+""",
+            encoding="utf-8",
         )
         result = pytester.runpytest("a")
         result.stdout.fnmatch_lines(["*hello: 42*", "line1", str(pytester.path)])
@@ -1656,7 +1663,7 @@ def test_fdopen_kept_alive_issue124(pytester: Pytester) -> None:
         import os, sys
         k = []
         def test_open_file_and_keep_alive(capfd):
-            stdout = os.fdopen(1, 'w', 1)
+            stdout = os.fdopen(1, 'w', buffering=1, encoding='utf-8')
             k.append(stdout)
 
         def test_close_kept_alive_file():
@@ -1785,7 +1792,7 @@ def test_terminal_no_summary_warnings_header_once(pytester: Pytester) -> None:
 
 @pytest.fixture(scope="session")
 def tr() -> TerminalReporter:
-    config = _pytest.config._prepareconfig()
+    config = _pytest.config._prepareconfig([])
     return TerminalReporter(config)
 
 
@@ -1984,9 +1991,9 @@ class TestClassicOutputStyle:
         result = pytester.runpytest("-o", "console_output_style=classic")
         result.stdout.fnmatch_lines(
             [
+                f"sub{os.sep}test_three.py .F.",
                 "test_one.py .",
                 "test_two.py F",
-                f"sub{os.sep}test_three.py .F.",
                 "*2 failed, 3 passed in*",
             ]
         )
@@ -1995,18 +2002,18 @@ class TestClassicOutputStyle:
         result = pytester.runpytest("-o", "console_output_style=classic", "-v")
         result.stdout.fnmatch_lines(
             [
-                "test_one.py::test_one PASSED",
-                "test_two.py::test_two FAILED",
                 f"sub{os.sep}test_three.py::test_three_1 PASSED",
                 f"sub{os.sep}test_three.py::test_three_2 FAILED",
                 f"sub{os.sep}test_three.py::test_three_3 PASSED",
+                "test_one.py::test_one PASSED",
+                "test_two.py::test_two FAILED",
                 "*2 failed, 3 passed in*",
             ]
         )
 
     def test_quiet(self, pytester: Pytester, test_files) -> None:
         result = pytester.runpytest("-o", "console_output_style=classic", "-q")
-        result.stdout.fnmatch_lines([".F.F.", "*2 failed, 3 passed in*"])
+        result.stdout.fnmatch_lines([".F..F", "*2 failed, 3 passed in*"])
 
 
 class TestProgressOutputStyle:
@@ -2390,7 +2397,12 @@ def test_line_with_reprcrash(monkeypatch: MonkeyPatch) -> None:
         __tracebackhide__ = True
         if msg:
             rep.longrepr.reprcrash.message = msg  # type: ignore
-        actual = _get_line_with_reprcrash_message(config, rep(), DummyTerminalWriter(), {})  # type: ignore
+        actual = _get_line_with_reprcrash_message(
+            config,  # type: ignore[arg-type]
+            rep(),  # type: ignore[arg-type]
+            DummyTerminalWriter(),  # type: ignore[arg-type]
+            {},
+        )
 
         assert actual == expected
         if actual != f"{mocked_verbose_word} {mocked_pos}":
@@ -2490,7 +2502,7 @@ class TestCodeHighlight:
         result.stdout.fnmatch_lines(
             color_mapping.format_for_fnmatch(
                 [
-                    "    {kw}def{hl-reset} {function}test_foo{hl-reset}():{endline}",
+                    "    {reset}{kw}def{hl-reset} {function}test_foo{hl-reset}():{endline}",
                     ">       {kw}assert{hl-reset} {number}1{hl-reset} == {number}10{hl-reset}{endline}",
                     "{bold}{red}E       assert 1 == 10{reset}",
                 ]
@@ -2512,7 +2524,7 @@ class TestCodeHighlight:
         result.stdout.fnmatch_lines(
             color_mapping.format_for_fnmatch(
                 [
-                    "    {kw}def{hl-reset} {function}test_foo{hl-reset}():{endline}",
+                    "    {reset}{kw}def{hl-reset} {function}test_foo{hl-reset}():{endline}",
                     "        {print}print{hl-reset}({str}'''{hl-reset}{str}{hl-reset}",
                     ">   {str}    {hl-reset}{str}'''{hl-reset}); {kw}assert{hl-reset} {number}0{hl-reset}{endline}",
                     "{bold}{red}E       assert 0{reset}",
@@ -2535,7 +2547,7 @@ class TestCodeHighlight:
         result.stdout.fnmatch_lines(
             color_mapping.format_for_fnmatch(
                 [
-                    "    {kw}def{hl-reset} {function}test_foo{hl-reset}():{endline}",
+                    "    {reset}{kw}def{hl-reset} {function}test_foo{hl-reset}():{endline}",
                     ">       {kw}assert{hl-reset} {number}1{hl-reset} == {number}10{hl-reset}{endline}",
                     "{bold}{red}E       assert 1 == 10{reset}",
                 ]
@@ -2597,3 +2609,122 @@ def test_format_trimmed() -> None:
 
     assert _format_trimmed(" ({}) ", msg, len(msg) + 4) == " (unconditional skip) "
     assert _format_trimmed(" ({}) ", msg, len(msg) + 3) == " (unconditional ...) "
+
+
+def test_summary_xfail_reason(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.xfail
+        def test_xfail():
+            assert False
+
+        @pytest.mark.xfail(reason="foo")
+        def test_xfail_reason():
+            assert False
+        """
+    )
+    result = pytester.runpytest("-rx")
+    expect1 = "XFAIL test_summary_xfail_reason.py::test_xfail"
+    expect2 = "XFAIL test_summary_xfail_reason.py::test_xfail_reason - foo"
+    result.stdout.fnmatch_lines([expect1, expect2])
+    assert result.stdout.lines.count(expect1) == 1
+    assert result.stdout.lines.count(expect2) == 1
+
+
+def test_summary_xfail_tb(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.xfail
+        def test_xfail():
+            a, b = 1, 2
+            assert a == b
+        """
+    )
+    result = pytester.runpytest("-rx")
+    result.stdout.fnmatch_lines(
+        [
+            "*= XFAILURES =*",
+            "*_ test_xfail _*",
+            "* @pytest.mark.xfail*",
+            "* def test_xfail():*",
+            "*    a, b = 1, 2*",
+            "> *assert a == b*",
+            "E *assert 1 == 2*",
+            "test_summary_xfail_tb.py:6: AssertionError*",
+            "*= short test summary info =*",
+            "XFAIL test_summary_xfail_tb.py::test_xfail",
+            "*= 1 xfailed in * =*",
+        ]
+    )
+
+
+def test_xfail_tb_line(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.xfail
+        def test_xfail():
+            a, b = 1, 2
+            assert a == b
+        """
+    )
+    result = pytester.runpytest("-rx", "--tb=line")
+    result.stdout.fnmatch_lines(
+        [
+            "*= XFAILURES =*",
+            "*test_xfail_tb_line.py:6: assert 1 == 2",
+            "*= short test summary info =*",
+            "XFAIL test_xfail_tb_line.py::test_xfail",
+            "*= 1 xfailed in * =*",
+        ]
+    )
+
+
+def test_summary_xpass_reason(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.xfail
+        def test_pass():
+            ...
+
+        @pytest.mark.xfail(reason="foo")
+        def test_reason():
+            ...
+        """
+    )
+    result = pytester.runpytest("-rX")
+    expect1 = "XPASS test_summary_xpass_reason.py::test_pass"
+    expect2 = "XPASS test_summary_xpass_reason.py::test_reason - foo"
+    result.stdout.fnmatch_lines([expect1, expect2])
+    assert result.stdout.lines.count(expect1) == 1
+    assert result.stdout.lines.count(expect2) == 1
+
+
+def test_xpass_output(pytester: Pytester) -> None:
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.xfail
+        def test_pass():
+            print('hi there')
+        """
+    )
+    result = pytester.runpytest("-rX")
+    result.stdout.fnmatch_lines(
+        [
+            "*= XPASSES =*",
+            "*_ test_pass _*",
+            "*- Captured stdout call -*",
+            "*= short test summary info =*",
+            "XPASS test_xpass_output.py::test_pass*",
+            "*= 1 xpassed in * =*",
+        ]
+    )

@@ -140,7 +140,7 @@ the ``self.db`` values in the traceback:
 
     $ pytest test_unittest_db.py
     =========================== test session starts ============================
-    platform linux -- Python 3.x.y, pytest-7.x.y, pluggy-1.x.y
+    platform linux -- Python 3.x.y, pytest-8.x.y, pluggy-1.x.y
     rootdir: /home/sweet/project
     collected 2 items
 
@@ -207,10 +207,10 @@ creation of a per-test temporary directory:
         @pytest.fixture(autouse=True)
         def initdir(self, tmp_path, monkeypatch):
             monkeypatch.chdir(tmp_path)  # change to pytest-provided temporary directory
-            tmp_path.joinpath("samplefile.ini").write_text("# testdata")
+            tmp_path.joinpath("samplefile.ini").write_text("# testdata", encoding="utf-8")
 
         def test_method(self):
-            with open("samplefile.ini") as f:
+            with open("samplefile.ini", encoding="utf-8") as f:
                 s = f.read()
             assert "testdata" in s
 

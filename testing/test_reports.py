@@ -1,7 +1,7 @@
+# mypy: allow-untyped-defs
 from typing import Sequence
 from typing import Union
 
-import pytest
 from _pytest._code.code import ExceptionChainRepr
 from _pytest._code.code import ExceptionRepr
 from _pytest.config import Config
@@ -9,6 +9,7 @@ from _pytest.pytester import Pytester
 from _pytest.python_api import approx
 from _pytest.reports import CollectReport
 from _pytest.reports import TestReport
+import pytest
 
 
 class TestReportSerialization:
@@ -278,7 +279,7 @@ class TestReportSerialization:
     ) -> None:
         """Check serialization/deserialization of report objects containing chained exceptions (#5786)"""
         pytester.makepyfile(
-            """
+            f"""
             def foo():
                 raise ValueError('value error')
             def test_a():
@@ -286,11 +287,9 @@ class TestReportSerialization:
                     foo()
                 except ValueError as e:
                     raise RuntimeError('runtime error') from e
-            if {error_during_import}:
+            if {report_class is CollectReport}:
                 test_a()
-        """.format(
-                error_during_import=report_class is CollectReport
-            )
+        """
         )
 
         reprec = pytester.inline_run()
@@ -304,9 +303,9 @@ class TestReportSerialization:
             report = reports[1]
         else:
             assert report_class is CollectReport
-            # two collection reports: session and test file
+            # three collection reports: session, test file, directory
             reports = reprec.getreports("pytest_collectreport")
-            assert len(reports) == 2
+            assert len(reports) == 3
             report = reports[1]
 
         def check_longrepr(longrepr: ExceptionChainRepr) -> None:
@@ -410,7 +409,7 @@ class TestReportSerialization:
     ) -> None:
         sub_dir = pytester.path.joinpath("ns")
         sub_dir.mkdir()
-        sub_dir.joinpath("conftest.py").write_text("import unknown")
+        sub_dir.joinpath("conftest.py").write_text("import unknown", encoding="utf-8")
 
         result = pytester.runpytest_subprocess(".")
         result.stdout.fnmatch_lines(["E   *Error: No module named 'unknown'"])
@@ -471,7 +470,7 @@ class TestHooks:
         )
         reprec = pytester.inline_run()
         reports = reprec.getreports("pytest_collectreport")
-        assert len(reports) == 2
+        assert len(reports) == 3
         for rep in reports:
             data = pytestconfig.hook.pytest_report_to_serializable(
                 config=pytestconfig, report=rep

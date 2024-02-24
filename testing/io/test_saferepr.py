@@ -1,8 +1,8 @@
-import pytest
-from _pytest._io.saferepr import _pformat_dispatch
+# mypy: allow-untyped-defs
 from _pytest._io.saferepr import DEFAULT_REPR_MAX_SIZE
 from _pytest._io.saferepr import saferepr
 from _pytest._io.saferepr import saferepr_unlimited
+import pytest
 
 
 def test_simple_repr():
@@ -59,9 +59,7 @@ def test_exceptions() -> None:
     obj = BrokenRepr(BrokenReprException("omg even worse"))
     s2 = saferepr(obj)
     assert s2 == (
-        "<[unpresentable exception ({!s}) raised in repr()] BrokenRepr object at 0x{:x}>".format(
-            exp_exc, id(obj)
-        )
+        f"<[unpresentable exception ({exp_exc!s}) raised in repr()] BrokenRepr object at 0x{id(obj):x}>"
     )
 
 
@@ -99,14 +97,12 @@ def test_baseexception():
     baseexc_str = BaseException("__str__")
     obj = BrokenObj(RaisingOnStrRepr([BaseException]))
     assert saferepr(obj) == (
-        "<[unpresentable exception ({!r}) "
-        "raised in repr()] BrokenObj object at 0x{:x}>".format(baseexc_str, id(obj))
+        f"<[unpresentable exception ({baseexc_str!r}) "
+        f"raised in repr()] BrokenObj object at 0x{id(obj):x}>"
     )
     obj = BrokenObj(RaisingOnStrRepr([RaisingOnStrRepr([BaseException])]))
     assert saferepr(obj) == (
-        "<[{!r} raised in repr()] BrokenObj object at 0x{:x}>".format(
-            baseexc_str, id(obj)
-        )
+        f"<[{baseexc_str!r} raised in repr()] BrokenObj object at 0x{id(obj):x}>"
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -157,12 +153,6 @@ def test_unicode():
     val = "£€"
     reprval = "'£€'"
     assert saferepr(val) == reprval
-
-
-def test_pformat_dispatch():
-    assert _pformat_dispatch("a") == "'a'"
-    assert _pformat_dispatch("a" * 10, width=5) == "'aaaaaaaaaa'"
-    assert _pformat_dispatch("foo bar", width=5) == "('foo '\n 'bar')"
 
 
 def test_broken_getattribute():

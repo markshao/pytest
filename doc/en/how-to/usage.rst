@@ -35,31 +35,43 @@ Pytest supports several ways to run and select tests from the command-line.
 
 .. code-block:: bash
 
-    pytest -k "MyClass and not method"
+    pytest -k 'MyClass and not method'
 
 This will run tests which contain names that match the given *string expression* (case-insensitive),
 which can include Python operators that use filenames, class names and function names as variables.
 The example above will run ``TestMyClass.test_something``  but not ``TestMyClass.test_method_simple``.
+Use ``""`` instead of ``''`` in expression when running this on Windows
 
 .. _nodeids:
 
-**Run tests by node ids**
+**Run tests by collection arguments**
 
-Each collected test is assigned a unique ``nodeid`` which consist of the module filename followed
-by specifiers like class names, function names and parameters from parametrization, separated by ``::`` characters.
+Pass the module filename relative to the working directory, followed by specifiers like the class name and function name
+separated by ``::`` characters, and parameters from parameterization enclosed in ``[]``.
 
 To run a specific test within a module:
 
 .. code-block:: bash
 
-    pytest test_mod.py::test_func
+    pytest tests/test_mod.py::test_func
 
-
-Another example specifying a test method in the command line:
+To run all tests in a class:
 
 .. code-block:: bash
 
-    pytest test_mod.py::TestClass::test_method
+    pytest tests/test_mod.py::TestClass
+
+Specifying a specific test method:
+
+.. code-block:: bash
+
+    pytest tests/test_mod.py::TestClass::test_method
+
+Specifying a specific parametrization of a test:
+
+.. code-block:: bash
+
+    pytest tests/test_mod.py::test_func[x1,y2]
 
 **Run tests by marker expressions**
 
@@ -172,7 +184,8 @@ You can invoke ``pytest`` from Python code directly:
 
 this acts as if you would call "pytest" from the command line.
 It will not raise :class:`SystemExit` but return the :ref:`exit code <exit-codes>` instead.
-You can pass in options and arguments:
+If you don't pass it any arguments, ``main`` reads the arguments from the command line arguments of the process (:data:`sys.argv`), which may be undesirable.
+You can pass in options and arguments explicitly:
 
 .. code-block:: python
 

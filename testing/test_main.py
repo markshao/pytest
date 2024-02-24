@@ -1,16 +1,17 @@
+# mypy: allow-untyped-defs
 import argparse
 import os
+from pathlib import Path
 import re
 import sys
-from pathlib import Path
 from typing import Optional
 
-import pytest
 from _pytest.config import ExitCode
 from _pytest.config import UsageError
 from _pytest.main import resolve_collection_argument
 from _pytest.main import validate_basetemp
 from _pytest.pytester import Pytester
+import pytest
 
 
 @pytest.mark.parametrize(
@@ -24,19 +25,17 @@ from _pytest.pytester import Pytester
 def test_wrap_session_notify_exception(ret_exc, pytester: Pytester) -> None:
     returncode, exc = ret_exc
     c1 = pytester.makeconftest(
-        """
+        f"""
         import pytest
 
         def pytest_sessionstart():
-            raise {exc}("boom")
+            raise {exc.__name__}("boom")
 
         def pytest_internalerror(excrepr, excinfo):
             returncode = {returncode!r}
             if returncode is not False:
                 pytest.exit("exiting after %s..." % excinfo.typename, returncode={returncode!r})
-    """.format(
-            returncode=returncode, exc=exc.__name__
-        )
+    """
     )
     result = pytester.runpytest()
     if returncode:
@@ -84,13 +83,11 @@ def test_wrap_session_exit_sessionfinish(
     returncode: Optional[int], pytester: Pytester
 ) -> None:
     pytester.makeconftest(
-        """
+        f"""
         import pytest
         def pytest_sessionfinish():
             pytest.exit(reason="exit_pytest_sessionfinish", returncode={returncode})
-    """.format(
-            returncode=returncode
-        )
+    """
     )
     result = pytester.runpytest()
     if returncode:
@@ -262,3 +259,34 @@ def test_module_full_path_without_drive(pytester: Pytester) -> None:
             "* 1 passed in *",
         ]
     )
+
+
+def test_very_long_cmdline_arg(pytester: Pytester) -> None:
+    """
+    Regression test for #11394.
+
+    Note: we could not manage to actually reproduce the error with this code, we suspect
+    GitHub runners are configured to support very long paths, however decided to leave
+    the test in place in case this ever regresses in the future.
+    """
+    pytester.makeconftest(
+        """
+        import pytest
+
+        def pytest_addoption(parser):
+            parser.addoption("--long-list", dest="long_list", action="store", default="all", help="List of things")
+
+        @pytest.fixture(scope="module")
+        def specified_feeds(request):
+            list_string = request.config.getoption("--long-list")
+            return list_string.split(',')
+        """
+    )
+    pytester.makepyfile(
+        """
+        def test_foo(specified_feeds):
+            assert len(specified_feeds) == 100_000
+        """
+    )
+    result = pytester.runpytest("--long-list", ",".join(["helloworld"] * 100_000))
+    result.stdout.fnmatch_lines("* 1 passed *")

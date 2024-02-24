@@ -1,3 +1,5 @@
+:tocdepth: 3
+
 .. _`api-reference`:
 
 API Reference
@@ -77,10 +79,12 @@ pytest.xfail
 pytest.exit
 ~~~~~~~~~~~
 
-.. autofunction:: pytest.exit(reason, [returncode=False, msg=None])
+.. autofunction:: pytest.exit(reason, [returncode=None, msg=None])
 
 pytest.main
 ~~~~~~~~~~~
+
+**Tutorial**: :ref:`pytest.main-usage`
 
 .. autofunction:: pytest.main
 
@@ -160,8 +164,7 @@ Add warning filters to marked test items.
         .. code-block:: python
 
             @pytest.mark.filterwarnings("ignore:.*usage will be deprecated.*:DeprecationWarning")
-            def test_foo():
-                ...
+            def test_foo(): ...
 
 
 .. _`pytest.mark.parametrize ref`:
@@ -235,28 +238,31 @@ pytest.mark.xfail
 
 Marks a test function as *expected to fail*.
 
-.. py:function:: pytest.mark.xfail(condition=None, *, reason=None, raises=None, run=True, strict=False)
+.. py:function:: pytest.mark.xfail(condition=False, *, reason=None, raises=None, run=True, strict=xfail_strict)
 
-    :type condition: bool or str
-    :param condition:
+    :keyword Union[bool, str] condition:
         Condition for marking the test function as xfail (``True/False`` or a
-        :ref:`condition string <string conditions>`). If a bool, you also have
+        :ref:`condition string <string conditions>`). If a ``bool``, you also have
         to specify ``reason`` (see :ref:`condition string <string conditions>`).
     :keyword str reason:
         Reason why the test function is marked as xfail.
     :keyword Type[Exception] raises:
-        Exception subclass (or tuple of subclasses) expected to be raised by the test function; other exceptions will fail the test.
+        Exception class (or tuple of classes) expected to be raised by the test function; other exceptions will fail the test.
+        Note that subclasses of the classes passed will also result in a match (similar to how the ``except`` statement works).
+
     :keyword bool run:
-        If the test function should actually be executed. If ``False``, the function will always xfail and will
+        Whether the test function should actually be executed. If ``False``, the function will always xfail and will
         not be executed (useful if a function is segfaulting).
     :keyword bool strict:
-        * If ``False`` (the default) the function will be shown in the terminal output as ``xfailed`` if it fails
+        * If ``False`` the function will be shown in the terminal output as ``xfailed`` if it fails
           and as ``xpass`` if it passes. In both cases this will not cause the test suite to fail as a whole. This
           is particularly useful to mark *flaky* tests (tests that fail at random) to be tackled later.
         * If ``True``, the function will be shown in the terminal output as ``xfailed`` if it fails, but if it
           unexpectedly passes then it will **fail** the test suite. This is particularly useful to mark functions
           that are always failing and there should be a clear indication if they unexpectedly start to pass (for example
           a new release of a library fixes a known bug).
+
+        Defaults to :confval:`xfail_strict`, which is ``False`` by default.
 
 
 Custom marks
@@ -269,8 +275,7 @@ For example:
 .. code-block:: python
 
     @pytest.mark.timeout(10, "slow", method="thread")
-    def test_function():
-        ...
+    def test_function(): ...
 
 Will create and attach a :class:`Mark <pytest.Mark>` object to the collected
 :class:`Item <pytest.Item>`, which can then be accessed by fixtures or hooks with
@@ -287,8 +292,7 @@ Example for using multiple custom markers:
 
     @pytest.mark.timeout(10, "slow", method="thread")
     @pytest.mark.slow
-    def test_function():
-        ...
+    def test_function(): ...
 
 When :meth:`Node.iter_markers <_pytest.nodes.Node.iter_markers>` or :meth:`Node.iter_markers_with_node <_pytest.nodes.Node.iter_markers_with_node>` is used with multiple markers, the marker closest to the function will be iterated over first. The above example will result in ``@pytest.mark.slow`` followed by ``@pytest.mark.timeout(...)``.
 
@@ -605,9 +609,29 @@ Hooks
 
 **Tutorial**: :ref:`writing-plugins`
 
-.. currentmodule:: _pytest.hookspec
-
 Reference to all hooks which can be implemented by :ref:`conftest.py files <localplugin>` and :ref:`plugins <plugins>`.
+
+@pytest.hookimpl
+~~~~~~~~~~~~~~~~
+
+.. function:: pytest.hookimpl
+    :decorator:
+
+    pytest's decorator for marking functions as hook implementations.
+
+    See :ref:`writinghooks` and :func:`pluggy.HookimplMarker`.
+
+@pytest.hookspec
+~~~~~~~~~~~~~~~~
+
+.. function:: pytest.hookspec
+    :decorator:
+
+    pytest's decorator for marking functions as hook specifications.
+
+    See :ref:`declaringhooks` and :func:`pluggy.HookspecMarker`.
+
+.. currentmodule:: _pytest.hookspec
 
 Bootstrapping hooks
 ~~~~~~~~~~~~~~~~~~~
@@ -616,8 +640,6 @@ Bootstrapping hooks called for plugins registered early enough (internal and set
 
 .. hook:: pytest_load_initial_conftests
 .. autofunction:: pytest_load_initial_conftests
-.. hook:: pytest_cmdline_preparse
-.. autofunction:: pytest_cmdline_preparse
 .. hook:: pytest_cmdline_parse
 .. autofunction:: pytest_cmdline_parse
 .. hook:: pytest_cmdline_main
@@ -655,6 +677,8 @@ Collection hooks
 .. autofunction:: pytest_collection
 .. hook:: pytest_ignore_collect
 .. autofunction:: pytest_ignore_collect
+.. hook:: pytest_collect_directory
+.. autofunction:: pytest_collect_directory
 .. hook:: pytest_collect_file
 .. autofunction:: pytest_collect_file
 .. hook:: pytest_pycollect_makemodule
@@ -783,23 +807,16 @@ reporting or interaction with exceptions:
 .. autofunction:: pytest_leave_pdb
 
 
-Objects
--------
+Collection tree objects
+-----------------------
 
-Full reference to objects accessible from :ref:`fixtures <fixture>` or :ref:`hooks <hook-reference>`.
+These are the collector and item classes (collectively called "nodes") which
+make up the collection tree.
 
+Node
+~~~~
 
-CallInfo
-~~~~~~~~
-
-.. autoclass:: pytest.CallInfo()
-    :members:
-
-
-Class
-~~~~~
-
-.. autoclass:: pytest.Class()
+.. autoclass:: _pytest.nodes.Node()
     :members:
     :show-inheritance:
 
@@ -810,32 +827,12 @@ Collector
     :members:
     :show-inheritance:
 
-CollectReport
-~~~~~~~~~~~~~
+Item
+~~~~
 
-.. autoclass:: pytest.CollectReport()
+.. autoclass:: pytest.Item()
     :members:
     :show-inheritance:
-    :inherited-members:
-
-Config
-~~~~~~
-
-.. autoclass:: pytest.Config()
-    :members:
-
-ExceptionInfo
-~~~~~~~~~~~~~
-
-.. autoclass:: pytest.ExceptionInfo()
-    :members:
-
-
-ExitCode
-~~~~~~~~
-
-.. autoclass:: pytest.ExitCode
-    :members:
 
 File
 ~~~~
@@ -844,18 +841,38 @@ File
     :members:
     :show-inheritance:
 
-
-FixtureDef
-~~~~~~~~~~
-
-.. autoclass:: _pytest.fixtures.FixtureDef()
-    :members:
-    :show-inheritance:
-
 FSCollector
 ~~~~~~~~~~~
 
 .. autoclass:: _pytest.nodes.FSCollector()
+    :members:
+    :show-inheritance:
+
+Session
+~~~~~~~
+
+.. autoclass:: pytest.Session()
+    :members:
+    :show-inheritance:
+
+Package
+~~~~~~~
+
+.. autoclass:: pytest.Package()
+    :members:
+    :show-inheritance:
+
+Module
+~~~~~~
+
+.. autoclass:: pytest.Module()
+    :members:
+    :show-inheritance:
+
+Class
+~~~~~
+
+.. autoclass:: pytest.Class()
     :members:
     :show-inheritance:
 
@@ -873,10 +890,64 @@ FunctionDefinition
     :members:
     :show-inheritance:
 
-Item
-~~~~
 
-.. autoclass:: pytest.Item()
+Objects
+-------
+
+Objects accessible from :ref:`fixtures <fixture>` or :ref:`hooks <hook-reference>`
+or importable from ``pytest``.
+
+
+CallInfo
+~~~~~~~~
+
+.. autoclass:: pytest.CallInfo()
+    :members:
+
+CollectReport
+~~~~~~~~~~~~~
+
+.. autoclass:: pytest.CollectReport()
+    :members:
+    :show-inheritance:
+    :inherited-members:
+
+Config
+~~~~~~
+
+.. autoclass:: pytest.Config()
+    :members:
+
+Dir
+~~~
+
+.. autoclass:: pytest.Dir()
+    :members:
+
+Directory
+~~~~~~~~~
+
+.. autoclass:: pytest.Directory()
+    :members:
+
+ExceptionInfo
+~~~~~~~~~~~~~
+
+.. autoclass:: pytest.ExceptionInfo()
+    :members:
+
+
+ExitCode
+~~~~~~~~
+
+.. autoclass:: pytest.ExitCode
+    :members:
+
+
+FixtureDef
+~~~~~~~~~~
+
+.. autoclass:: pytest.FixtureDef()
     :members:
     :show-inheritance:
 
@@ -907,19 +978,6 @@ Metafunc
 .. autoclass:: pytest.Metafunc()
     :members:
 
-Module
-~~~~~~
-
-.. autoclass:: pytest.Module()
-    :members:
-    :show-inheritance:
-
-Node
-~~~~
-
-.. autoclass:: _pytest.nodes.Node()
-    :members:
-
 Parser
 ~~~~~~
 
@@ -941,13 +999,6 @@ PytestPluginManager
     :inherited-members:
     :show-inheritance:
 
-Session
-~~~~~~~
-
-.. autoclass:: pytest.Session()
-    :members:
-    :show-inheritance:
-
 TestReport
 ~~~~~~~~~~
 
@@ -956,10 +1007,16 @@ TestReport
     :show-inheritance:
     :inherited-members:
 
-_Result
+TestShortLogReport
+~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: pytest.TestShortLogReport()
+    :members:
+
+Result
 ~~~~~~~
 
-Result object used within :ref:`hook wrappers <hookwrapper>`, see :py:class:`_Result in the pluggy documentation <pluggy._callers._Result>` for more information.
+Result object used within :ref:`hook wrappers <hookwrapper>`, see :py:class:`Result in the pluggy documentation <pluggy.Result>` for more information.
 
 Stash
 ~~~~~
@@ -1049,11 +1106,11 @@ Environment variables that can be used to change pytest's behavior.
 
 .. envvar:: CI
 
-When set (regardless of value), pytest acknowledges that is running in a CI process. Alterative to ``BUILD_NUMBER`` variable.
+When set (regardless of value), pytest acknowledges that is running in a CI process. Alternative to ``BUILD_NUMBER`` variable.
 
 .. envvar:: BUILD_NUMBER
 
-When set (regardless of value), pytest acknowledges that is running in a CI process. Alterative to CI variable.
+When set (regardless of value), pytest acknowledges that is running in a CI process. Alternative to CI variable.
 
 .. envvar:: PYTEST_ADDOPTS
 
@@ -1098,19 +1155,22 @@ When set to ``0``, pytest will not use color.
 
 .. envvar:: NO_COLOR
 
-When set (regardless of value), pytest will not use color in terminal output.
+When set to a non-empty string (regardless of value), pytest will not use color in terminal output.
 ``PY_COLORS`` takes precedence over ``NO_COLOR``, which takes precedence over ``FORCE_COLOR``.
 See `no-color.org <https://no-color.org/>`__ for other libraries supporting this community standard.
 
 .. envvar:: FORCE_COLOR
 
-When set (regardless of value), pytest will use color in terminal output.
+When set to a non-empty string (regardless of value), pytest will use color in terminal output.
 ``PY_COLORS`` and ``NO_COLOR`` take precedence over ``FORCE_COLOR``.
 
 Exceptions
 ----------
 
-.. autoclass:: pytest.UsageError()
+.. autoexception:: pytest.UsageError()
+    :show-inheritance:
+
+.. autoexception:: pytest.FixtureLookupError()
     :show-inheritance:
 
 .. _`warnings ref`:
@@ -1144,7 +1204,7 @@ Custom warnings generated in some situations such as improper usage or deprecate
 .. autoclass:: pytest.PytestReturnNotNoneWarning
   :show-inheritance:
 
-.. autoclass:: pytest.PytestRemovedIn8Warning
+.. autoclass:: pytest.PytestRemovedIn9Warning
   :show-inheritance:
 
 .. autoclass:: pytest.PytestUnhandledCoroutineWarning
@@ -1613,11 +1673,11 @@ passed multiple times. The expected format is ``name=value``. For example::
    Additionally, ``pytest`` will attempt to intelligently identify and ignore a
    virtualenv by the presence of an activation script.  Any directory deemed to
    be the root of a virtual environment will not be considered during test
-   collection unless ``‑‑collect‑in‑virtualenv`` is given.  Note also that
-   ``norecursedirs`` takes precedence over ``‑‑collect‑in‑virtualenv``; e.g. if
+   collection unless ``--collect-in-virtualenv`` is given.  Note also that
+   ``norecursedirs`` takes precedence over ``--collect-in-virtualenv``; e.g. if
    you intend to run tests in a virtualenv with a base directory that matches
    ``'.*'`` you *must* override ``norecursedirs`` in addition to using the
-   ``‑‑collect‑in‑virtualenv`` flag.
+   ``--collect-in-virtualenv`` flag.
 
 
 .. confval:: python_classes
@@ -1697,6 +1757,11 @@ passed multiple times. The expected format is ``name=value``. For example::
         [pytest]
         pythonpath = src1 src2
 
+   .. note::
+
+        ``pythonpath`` does not affect some imports that happen very early,
+        most notably plugins loaded using the ``-p`` command line option.
+
 
 .. confval:: required_plugins
 
@@ -1713,13 +1778,12 @@ passed multiple times. The expected format is ``name=value``. For example::
 
 .. confval:: testpaths
 
-
-
    Sets list of directories that should be searched for tests when
    no specific directories, files or test ids are given in the command line when
    executing pytest from the :ref:`rootdir <rootdir>` directory.
    File system paths may use shell-style wildcards, including the recursive
    ``**`` pattern.
+
    Useful when all project tests are in a known location to speed up
    test collection and to avoid picking up undesired tests by accident.
 
@@ -1728,8 +1792,17 @@ passed multiple times. The expected format is ``name=value``. For example::
         [pytest]
         testpaths = testing doc
 
-   This tells pytest to only look for tests in ``testing`` and ``doc``
-   directories when executing from the root directory.
+   This configuration means that executing:
+
+   .. code-block:: console
+
+       pytest
+
+   has the same practical effects as executing:
+
+   .. code-block:: console
+
+       pytest testing doc
 
 
 .. confval:: tmp_path_retention_count
@@ -1744,7 +1817,7 @@ passed multiple times. The expected format is ``name=value``. For example::
         [pytest]
         tmp_path_retention_count = 3
 
-    Default: 3
+   Default: ``3``
 
 
 .. confval:: tmp_path_retention_policy
@@ -1763,7 +1836,7 @@ passed multiple times. The expected format is ``name=value``. For example::
         [pytest]
         tmp_path_retention_policy = "all"
 
-    Default: all
+   Default: ``all``
 
 
 .. confval:: usefixtures
@@ -1777,6 +1850,19 @@ passed multiple times. The expected format is ``name=value``. For example::
         [pytest]
         usefixtures =
             clean_db
+
+
+.. confval:: verbosity_assertions
+
+    Set a verbosity level specifically for assertion related output, overriding the application wide level.
+
+    .. code-block:: ini
+
+        [pytest]
+        verbosity_assertions = 2
+
+    Defaults to application wide verbosity level (via the ``-v`` command-line option). A special value of
+    "auto" can be used to explicitly use the global verbosity level.
 
 
 .. confval:: xfail_strict
@@ -1852,8 +1938,12 @@ All the command-line flags can be obtained by running ``pytest --help``::
                             tests. Optional argument: glob (default: '*').
       --cache-clear         Remove all cache contents at start of test run
       --lfnf={all,none}, --last-failed-no-failures={all,none}
-                            Which tests to run with no previously (known)
-                            failures
+                            With ``--lf``, determines whether to execute tests
+                            when there are no previously (known) failures or
+                            when no cached ``lastfailed`` data was found.
+                            ``all`` (the default) runs the full test suite
+                            again. ``none`` just emits a message about no known
+                            failures and exits successfully.
       --sw, --stepwise      Exit on test failure and continue from last failing
                             test next time
       --sw-skip, --stepwise-skip
@@ -1904,8 +1994,9 @@ All the command-line flags can be obtained by running ``pytest --help``::
       --strict-markers      Markers not registered in the `markers` section of
                             the configuration file raise errors
       --strict              (Deprecated) alias to --strict-markers
-      -c file               Load configuration from `file` instead of trying to
-                            locate one of the implicit configuration files
+      -c FILE, --config-file=FILE
+                            Load configuration from `FILE` instead of trying to
+                            locate one of the implicit configuration files.
       --continue-on-collection-errors
                             Force test execution even if collection errors occur
       --rootdir=ROOTDIR     Define root directory for tests. Can be relative
@@ -1937,7 +2028,7 @@ All the command-line flags can be obtained by running ``pytest --help``::
                             failure
       --doctest-glob=pat    Doctests file matching pattern, default: test*.txt
       --doctest-ignore-import-errors
-                            Ignore doctest ImportErrors
+                            Ignore doctest collection errors
       --doctest-continue-on-failure
                             For a given doctest, continue to run after the first
                             failure
@@ -1996,12 +2087,12 @@ All the command-line flags can be obtained by running ``pytest --help``::
                             Auto-indent multiline messages passed to the logging
                             module. Accepts true|on, false|off or an integer.
       --log-disable=LOGGER_DISABLE
-                            Disable a logger by name. Can be passed multipe
+                            Disable a logger by name. Can be passed multiple
                             times.
 
     [pytest] ini-options in the first pytest.ini|tox.ini|setup.cfg|pyproject.toml file found:
 
-      markers (linelist):   Markers for test functions
+      markers (linelist):   Register new markers for test functions
       empty_parameter_set_mark (string):
                             Default marker for empty parametersets
       norecursedirs (args): Directory patterns to avoid for recursion
@@ -2042,6 +2133,10 @@ All the command-line flags can be obtained by running ``pytest --help``::
       enable_assertion_pass_hook (bool):
                             Enables the pytest_assertion_pass hook. Make sure to
                             delete any previously generated pyc cache files.
+      verbosity_assertions (string):
+                            Specify a verbosity level for assertions, overriding
+                            the main level. Higher levels will provide more
+                            detailed explanation when an assertion fails.
       junit_suite_name (string):
                             Test suite name for JUnit report
       junit_logging (string):

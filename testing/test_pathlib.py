@@ -1,14 +1,16 @@
+# mypy: allow-untyped-defs
+import errno
 import os.path
+from pathlib import Path
 import pickle
 import sys
-import unittest.mock
-from pathlib import Path
 from textwrap import dedent
 from types import ModuleType
 from typing import Any
 from typing import Generator
+from typing import Iterator
+import unittest.mock
 
-import pytest
 from _pytest.monkeypatch import MonkeyPatch
 from _pytest.pathlib import bestrelpath
 from _pytest.pathlib import commonpath
@@ -17,14 +19,18 @@ from _pytest.pathlib import fnmatch_ex
 from _pytest.pathlib import get_extended_length_path_str
 from _pytest.pathlib import get_lock_path
 from _pytest.pathlib import import_path
+from _pytest.pathlib import ImportMode
 from _pytest.pathlib import ImportPathMismatchError
 from _pytest.pathlib import insert_missing_modules
 from _pytest.pathlib import maybe_delete_a_numbered_dir
 from _pytest.pathlib import module_name_from_path
 from _pytest.pathlib import resolve_package_path
+from _pytest.pathlib import safe_exists
 from _pytest.pathlib import symlink_or_skip
 from _pytest.pathlib import visit
+from _pytest.pytester import Pytester
 from _pytest.tmpdir import TempPathFactory
+import pytest
 
 
 class TestFNMatcherPort:
@@ -100,13 +106,13 @@ class TestImportPath:
     def setuptestfs(self, path: Path) -> None:
         # print "setting up test fs for", repr(path)
         samplefile = path / "samplefile"
-        samplefile.write_text("samplefile\n")
+        samplefile.write_text("samplefile\n", encoding="utf-8")
 
         execfile = path / "execfile"
-        execfile.write_text("x=42")
+        execfile.write_text("x=42", encoding="utf-8")
 
         execfilepy = path / "execfile.py"
-        execfilepy.write_text("x=42")
+        execfilepy.write_text("x=42", encoding="utf-8")
 
         d = {1: 2, "hello": "world", "answer": 42}
         path.joinpath("samplepickle").write_bytes(pickle.dumps(d, 1))
@@ -120,9 +126,9 @@ class TestImportPath:
         otherdir.joinpath("__init__.py").touch()
 
         module_a = otherdir / "a.py"
-        module_a.write_text("from .b import stuff as result\n")
+        module_a.write_text("from .b import stuff as result\n", encoding="utf-8")
         module_b = otherdir / "b.py"
-        module_b.write_text('stuff="got it"\n')
+        module_b.write_text('stuff="got it"\n', encoding="utf-8")
         module_c = otherdir / "c.py"
         module_c.write_text(
             dedent(
@@ -131,7 +137,8 @@ class TestImportPath:
             import otherdir.a
             value = otherdir.a.result
         """
-            )
+            ),
+            encoding="utf-8",
         )
         module_d = otherdir / "d.py"
         module_d.write_text(
@@ -141,7 +148,8 @@ class TestImportPath:
             from otherdir import a
             value2 = a.result
         """
-            )
+            ),
+            encoding="utf-8",
         )
 
     def test_smoke_test(self, path1: Path) -> None:
@@ -229,15 +237,15 @@ class TestImportPath:
         name = "pointsback123"
         p = tmp_path.joinpath(name + ".py")
         p.touch()
-        for ending in (".pyc", ".pyo"):
-            mod = ModuleType(name)
-            pseudopath = tmp_path.joinpath(name + ending)
-            pseudopath.touch()
-            mod.__file__ = str(pseudopath)
-            monkeypatch.setitem(sys.modules, name, mod)
-            newmod = import_path(p, root=tmp_path)
-            assert mod == newmod
-        monkeypatch.undo()
+        with monkeypatch.context() as mp:
+            for ending in (".pyc", ".pyo"):
+                mod = ModuleType(name)
+                pseudopath = tmp_path.joinpath(name + ending)
+                pseudopath.touch()
+                mod.__file__ = str(pseudopath)
+                mp.setitem(sys.modules, name, mod)
+                newmod = import_path(p, root=tmp_path)
+                assert mod == newmod
         mod = ModuleType(name)
         pseudopath = tmp_path.joinpath(name + "123.py")
         pseudopath.touch()
@@ -280,29 +288,36 @@ class TestImportPath:
             import_path(tmp_path / "invalid.py", root=tmp_path)
 
     @pytest.fixture
-    def simple_module(self, tmp_path: Path) -> Path:
-        fn = tmp_path / "_src/tests/mymod.py"
+    def simple_module(
+        self, tmp_path: Path, request: pytest.FixtureRequest
+    ) -> Iterator[Path]:
+        name = f"mymod_{request.node.name}"
+        fn = tmp_path / f"_src/tests/{name}.py"
         fn.parent.mkdir(parents=True)
-        fn.write_text("def foo(x): return 40 + x")
-        return fn
+        fn.write_text("def foo(x): return 40 + x", encoding="utf-8")
+        module_name = module_name_from_path(fn, root=tmp_path)
+        yield fn
+        sys.modules.pop(module_name, None)
 
-    def test_importmode_importlib(self, simple_module: Path, tmp_path: Path) -> None:
+    def test_importmode_importlib(
+        self, simple_module: Path, tmp_path: Path, request: pytest.FixtureRequest
+    ) -> None:
         """`importlib` mode does not change sys.path."""
         module = import_path(simple_module, mode="importlib", root=tmp_path)
         assert module.foo(2) == 42  # type: ignore[attr-defined]
         assert str(simple_module.parent) not in sys.path
         assert module.__name__ in sys.modules
-        assert module.__name__ == "_src.tests.mymod"
+        assert module.__name__ == f"_src.tests.mymod_{request.node.name}"
         assert "_src" in sys.modules
         assert "_src.tests" in sys.modules
 
-    def test_importmode_twice_is_different_module(
+    def test_remembers_previous_imports(
         self, simple_module: Path, tmp_path: Path
     ) -> None:
-        """`importlib` mode always returns a new module."""
+        """`importlib` mode called remembers previous module (#10341, #10811)."""
         module1 = import_path(simple_module, mode="importlib", root=tmp_path)
         module2 = import_path(simple_module, mode="importlib", root=tmp_path)
-        assert module1 is not module2
+        assert module1 is module2
 
     def test_no_meta_path_found(
         self, simple_module: Path, monkeypatch: MonkeyPatch, tmp_path: Path
@@ -314,6 +329,9 @@ class TestImportPath:
 
         # mode='importlib' fails if no spec is found to load the module
         import importlib.util
+
+        # Force module to be re-imported.
+        del sys.modules[module.__name__]
 
         monkeypatch.setattr(
             importlib.util, "spec_from_file_location", lambda *args: None
@@ -329,18 +347,18 @@ def test_resolve_package_path(tmp_path: Path) -> None:
     (pkg / "subdir").mkdir()
     (pkg / "subdir/__init__.py").touch()
     assert resolve_package_path(pkg) == pkg
-    assert resolve_package_path(pkg.joinpath("subdir", "__init__.py")) == pkg
+    assert resolve_package_path(pkg / "subdir/__init__.py") == pkg
 
 
 def test_package_unimportable(tmp_path: Path) -> None:
     pkg = tmp_path / "pkg1-1"
     pkg.mkdir()
     pkg.joinpath("__init__.py").touch()
-    subdir = pkg.joinpath("subdir")
+    subdir = pkg / "subdir"
     subdir.mkdir()
-    pkg.joinpath("subdir/__init__.py").touch()
+    (pkg / "subdir/__init__.py").touch()
     assert resolve_package_path(subdir) == subdir
-    xyz = subdir.joinpath("xyz.py")
+    xyz = subdir / "xyz.py"
     xyz.touch()
     assert resolve_package_path(xyz) == subdir
     assert not resolve_package_path(pkg)
@@ -447,7 +465,7 @@ def test_samefile_false_negatives(tmp_path: Path, monkeypatch: MonkeyPatch) -> N
     return False, even when they are clearly equal.
     """
     module_path = tmp_path.joinpath("my_module.py")
-    module_path.write_text("def foo(): return 42")
+    module_path.write_text("def foo(): return 42", encoding="utf-8")
     monkeypatch.syspath_prepend(tmp_path)
 
     with monkeypatch.context() as mp:
@@ -473,7 +491,8 @@ class TestImportLibMode:
                 class Data:
                     value: str
                 """
-            )
+            ),
+            encoding="utf-8",
         )
 
         module = import_path(fn, mode="importlib", root=tmp_path)
@@ -498,7 +517,8 @@ class TestImportLibMode:
                     s = pickle.dumps(_action)
                     return pickle.loads(s)
                 """
-            )
+            ),
+            encoding="utf-8",
         )
 
         module = import_path(fn, mode="importlib", root=tmp_path)
@@ -525,7 +545,8 @@ class TestImportLibMode:
                 class Data:
                     x: int = 42
                 """
-            )
+            ),
+            encoding="utf-8",
         )
 
         fn2 = tmp_path.joinpath("_src/m2/tests/test.py")
@@ -540,7 +561,8 @@ class TestImportLibMode:
                 class Data:
                     x: str = ""
                 """
-            )
+            ),
+            encoding="utf-8",
         )
 
         import pickle
@@ -568,6 +590,14 @@ class TestImportLibMode:
         result = module_name_from_path(Path("/home/foo/test_foo.py"), Path("/bar"))
         assert result == "home.foo.test_foo"
 
+        # Importing __init__.py files should return the package as module name.
+        result = module_name_from_path(tmp_path / "src/app/__init__.py", tmp_path)
+        assert result == "src.app"
+
+        # Unless __init__.py file is at the root, in which case we cannot have an empty module name.
+        result = module_name_from_path(tmp_path / "__init__.py", tmp_path)
+        assert result == "__init__"
+
     def test_insert_missing_modules(
         self, monkeypatch: MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -586,3 +616,100 @@ class TestImportLibMode:
         modules = {}
         insert_missing_modules(modules, "")
         assert modules == {}
+
+    def test_parent_contains_child_module_attribute(
+        self, monkeypatch: MonkeyPatch, tmp_path: Path
+    ):
+        monkeypatch.chdir(tmp_path)
+        # Use 'xxx' and 'xxy' as parent names as they are unlikely to exist and
+        # don't end up being imported.
+        modules = {"xxx.tests.foo": ModuleType("xxx.tests.foo")}
+        insert_missing_modules(modules, "xxx.tests.foo")
+        assert sorted(modules) == ["xxx", "xxx.tests", "xxx.tests.foo"]
+        assert modules["xxx"].tests is modules["xxx.tests"]
+        assert modules["xxx.tests"].foo is modules["xxx.tests.foo"]
+
+    def test_importlib_package(self, monkeypatch: MonkeyPatch, tmp_path: Path):
+        """
+        Importing a package using --importmode=importlib should not import the
+        package's __init__.py file more than once (#11306).
+        """
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.syspath_prepend(tmp_path)
+
+        package_name = "importlib_import_package"
+        tmp_path.joinpath(package_name).mkdir()
+        init = tmp_path.joinpath(f"{package_name}/__init__.py")
+        init.write_text(
+            dedent(
+                """
+                from .singleton import Singleton
+
+                instance = Singleton()
+                """
+            ),
+            encoding="ascii",
+        )
+        singleton = tmp_path.joinpath(f"{package_name}/singleton.py")
+        singleton.write_text(
+            dedent(
+                """
+                class Singleton:
+                    INSTANCES = []
+
+                    def __init__(self) -> None:
+                        self.INSTANCES.append(self)
+                        if len(self.INSTANCES) > 1:
+                            raise RuntimeError("Already initialized")
+                """
+            ),
+            encoding="ascii",
+        )
+
+        mod = import_path(init, root=tmp_path, mode=ImportMode.importlib)
+        assert len(mod.instance.INSTANCES) == 1
+
+    def test_importlib_root_is_package(self, pytester: Pytester) -> None:
+        """
+        Regression for importing a `__init__`.py file that is at the root
+        (#11417).
+        """
+        pytester.makepyfile(__init__="")
+        pytester.makepyfile(
+            """
+            def test_my_test():
+                assert True
+            """
+        )
+
+        result = pytester.runpytest("--import-mode=importlib")
+        result.stdout.fnmatch_lines("* 1 passed *")
+
+
+def test_safe_exists(tmp_path: Path) -> None:
+    d = tmp_path.joinpath("some_dir")
+    d.mkdir()
+    assert safe_exists(d) is True
+
+    f = tmp_path.joinpath("some_file")
+    f.touch()
+    assert safe_exists(f) is True
+
+    # Use unittest.mock() as a context manager to have a very narrow
+    # patch lifetime.
+    p = tmp_path.joinpath("some long filename" * 100)
+    with unittest.mock.patch.object(
+        Path,
+        "exists",
+        autospec=True,
+        side_effect=OSError(errno.ENAMETOOLONG, "name too long"),
+    ):
+        assert safe_exists(p) is False
+
+    with unittest.mock.patch.object(
+        Path,
+        "exists",
+        autospec=True,
+        side_effect=ValueError("name too long"),
+    ):
+        assert safe_exists(p) is False

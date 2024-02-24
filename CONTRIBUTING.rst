@@ -50,7 +50,7 @@ Fix bugs
 --------
 
 Look through the `GitHub issues for bugs <https://github.com/pytest-dev/pytest/labels/type:%20bug>`_.
-See also the `"status: easy" issues <https://github.com/pytest-dev/pytest/labels/status%3A%20easy>`_
+See also the `"good first issue" issues <https://github.com/pytest-dev/pytest/labels/good%20first%20issue>`_
 that are friendly to new contributors.
 
 :ref:`Talk <contact>` to developers to find out how you can fix specific bugs. To indicate that you are going
@@ -197,11 +197,12 @@ Short version
 ~~~~~~~~~~~~~
 
 #. Fork the repository.
+#. Fetch tags from upstream if necessary (if you cloned only main `git fetch --tags https://github.com/pytest-dev/pytest`).
 #. Enable and install `pre-commit <https://pre-commit.com>`_ to ensure style-guides and code checks are followed.
-#. Follow **PEP-8** for naming and `black <https://github.com/psf/black>`_ for formatting.
+#. Follow `PEP-8 <https://www.python.org/dev/peps/pep-0008/>`_ for naming.
 #. Tests are run using ``tox``::
 
-    tox -e linting,py37
+    tox -e linting,py39
 
    The test environments above are usually enough to cover most cases locally.
 
@@ -236,6 +237,7 @@ Here is a simple overview, with pytest-specific bits:
 
     $ git clone git@github.com:YOUR_GITHUB_USERNAME/pytest.git
     $ cd pytest
+    $ git fetch --tags https://github.com/pytest-dev/pytest
     # now, create your own branch off "main":
 
         $ git checkout -b your-bugfix-branch-name main
@@ -272,24 +274,24 @@ Here is a simple overview, with pytest-specific bits:
 
 #. Run all the tests
 
-   You need to have Python 3.7 available in your system.  Now
+   You need to have Python 3.8 or later available in your system.  Now
    running tests is as simple as issuing this command::
 
-    $ tox -e linting,py37
+    $ tox -e linting,py39
 
-   This command will run tests via the "tox" tool against Python 3.7
+   This command will run tests via the "tox" tool against Python 3.9
    and also perform "lint" coding-style checks.
 
-#. You can now edit your local working copy and run the tests again as necessary. Please follow PEP-8 for naming.
+#. You can now edit your local working copy and run the tests again as necessary. Please follow `PEP-8 <https://www.python.org/dev/peps/pep-0008/>`_ for naming.
 
-   You can pass different options to ``tox``. For example, to run tests on Python 3.7 and pass options to pytest
+   You can pass different options to ``tox``. For example, to run tests on Python 3.9 and pass options to pytest
    (e.g. enter pdb on failure) to pytest you can do::
 
-    $ tox -e py37 -- --pdb
+    $ tox -e py39 -- --pdb
 
-   Or to only run tests in a particular test module on Python 3.7::
+   Or to only run tests in a particular test module on Python 3.9::
 
-    $ tox -e py37 -- testing/test_config.py
+    $ tox -e py39 -- testing/test_config.py
 
 
    When committing, ``pre-commit`` will re-format the files if necessary.

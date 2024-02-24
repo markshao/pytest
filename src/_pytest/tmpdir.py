@@ -1,44 +1,40 @@
+# mypy: allow-untyped-defs
 """Support for providing temporary directories to test functions."""
 import dataclasses
 import os
-import re
-import tempfile
 from pathlib import Path
+import re
 from shutil import rmtree
+import tempfile
 from typing import Any
 from typing import Dict
+from typing import final
 from typing import Generator
+from typing import Literal
 from typing import Optional
-from typing import TYPE_CHECKING
 from typing import Union
 
-from _pytest.nodes import Item
-from _pytest.reports import CollectReport
-from _pytest.stash import StashKey
-
-if TYPE_CHECKING:
-    from typing_extensions import Literal
-
-    RetentionType = Literal["all", "failed", "none"]
-
-
-from _pytest.config.argparsing import Parser
-
+from .pathlib import cleanup_dead_symlinks
 from .pathlib import LOCK_TIMEOUT
 from .pathlib import make_numbered_dir
 from .pathlib import make_numbered_dir_with_cleanup
 from .pathlib import rm_rf
-from .pathlib import cleanup_dead_symlink
-from _pytest.compat import final, get_user_id
+from _pytest.compat import get_user_id
 from _pytest.config import Config
 from _pytest.config import ExitCode
 from _pytest.config import hookimpl
+from _pytest.config.argparsing import Parser
 from _pytest.deprecated import check_ispytest
 from _pytest.fixtures import fixture
 from _pytest.fixtures import FixtureRequest
 from _pytest.monkeypatch import MonkeyPatch
+from _pytest.nodes import Item
+from _pytest.reports import TestReport
+from _pytest.stash import StashKey
+
 
 tmppath_result_key = StashKey[Dict[str, bool]]()
+RetentionType = Literal["all", "failed", "none"]
 
 
 @final
@@ -54,13 +50,13 @@ class TempPathFactory:
     _trace: Any
     _basetemp: Optional[Path]
     _retention_count: int
-    _retention_policy: "RetentionType"
+    _retention_policy: RetentionType
 
     def __init__(
         self,
         given_basetemp: Optional[Path],
         retention_count: int,
-        retention_policy: "RetentionType",
+        retention_policy: RetentionType,
         trace,
         basetemp: Optional[Path] = None,
         *,
@@ -100,7 +96,7 @@ class TempPathFactory:
         policy = config.getini("tmp_path_retention_policy")
         if policy not in ("all", "failed", "none"):
             raise ValueError(
-                f"tmp_path_retention_policy must be either all, failed, none. Current intput: {policy}."
+                f"tmp_path_retention_policy must be either all, failed, none. Current input: {policy}."
             )
 
         return cls(
@@ -209,7 +205,7 @@ def get_user() -> Optional[str]:
         import getpass
 
         return getpass.getuser()
-    except (ImportError, KeyError):
+    except (ImportError, OSError, KeyError):
         return None
 
 
@@ -268,12 +264,11 @@ def tmp_path(
     and old bases are removed after 3 sessions, to aid in debugging.
     This behavior can be configured with :confval:`tmp_path_retention_count` and
     :confval:`tmp_path_retention_policy`.
-    If ``--basetemp`` is used then it is cleared each session. See :ref:`base
-    temporary directory`.
+    If ``--basetemp`` is used then it is cleared each session. See
+    :ref:`temporary directory location and retention`.
 
     The returned object is a :class:`pathlib.Path` object.
     """
-
     path = _mk_tmp(request, tmp_path_factory)
     yield path
 
@@ -289,37 +284,38 @@ def tmp_path(
 
     del request.node.stash[tmppath_result_key]
 
-    # remove dead symlink
-    basetemp = tmp_path_factory._basetemp
-    if basetemp is None:
-        return
-    cleanup_dead_symlink(basetemp)
-
 
 def pytest_sessionfinish(session, exitstatus: Union[int, ExitCode]):
     """After each session, remove base directory if all the tests passed,
     the policy is "failed", and the basetemp is not specified by a user.
     """
     tmp_path_factory: TempPathFactory = session.config._tmp_path_factory
-    if tmp_path_factory._basetemp is None:
+    basetemp = tmp_path_factory._basetemp
+    if basetemp is None:
         return
+
     policy = tmp_path_factory._retention_policy
     if (
         exitstatus == 0
         and policy == "failed"
         and tmp_path_factory._given_basetemp is None
     ):
-        passed_dir = tmp_path_factory._basetemp
-        if passed_dir.exists():
+        if basetemp.is_dir():
             # We do a "best effort" to remove files, but it might not be possible due to some leaked resource,
             # permissions, etc, in which case we ignore it.
-            rmtree(passed_dir, ignore_errors=True)
+            rmtree(basetemp, ignore_errors=True)
+
+    # Remove dead symlinks.
+    if basetemp.is_dir():
+        cleanup_dead_symlinks(basetemp)
 
 
-@hookimpl(tryfirst=True, hookwrapper=True)
-def pytest_runtest_makereport(item: Item, call):
-    outcome = yield
-    result: CollectReport = outcome.get_result()
-
+@hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_makereport(
+    item: Item, call
+) -> Generator[None, TestReport, TestReport]:
+    rep = yield
+    assert rep.when is not None
     empty: Dict[str, bool] = {}
-    item.stash.setdefault(tmppath_result_key, empty)[result.when] = result.passed
+    item.stash.setdefault(tmppath_result_key, empty)[rep.when] = rep.passed
+    return rep
