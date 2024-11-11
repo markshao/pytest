@@ -7,10 +7,6 @@ This page lists all pytest features that are currently deprecated or have been r
 The objective is to give users a clear rationale why a certain feature has been removed, and what alternatives
 should be used instead.
 
-.. contents::
-    :depth: 3
-    :local:
-
 
 Deprecated Features
 -------------------
@@ -19,7 +15,80 @@ Below is a complete list of all pytest features which are considered deprecated.
 :class:`~pytest.PytestWarning` or subclasses, which can be filtered using :ref:`standard warning filters <warnings>`.
 
 
-.. _legacy-path-hooks-deprecated:
+.. _import-or-skip-import-error:
+
+``pytest.importorskip`` default behavior regarding :class:`ImportError`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 8.2
+
+Traditionally :func:`pytest.importorskip` will capture :class:`ImportError`, with the original intent being to skip
+tests where a dependent module is not installed, for example testing with different dependencies.
+
+However some packages might be installed in the system, but are not importable due to
+some other issue, for example, a compilation error or a broken installation. In those cases :func:`pytest.importorskip`
+would still silently skip the test, but more often than not users would like to see the unexpected
+error so the underlying issue can be fixed.
+
+In ``8.2`` the ``exc_type`` parameter has been added, giving users the ability of passing :class:`ModuleNotFoundError`
+to skip tests only if the module cannot really be found, and not because of some other error.
+
+Catching only :class:`ModuleNotFoundError` by default (and letting other errors propagate) would be the best solution,
+however for backward compatibility, pytest will keep the existing behavior but raise an warning if:
+
+1. The captured exception is of type :class:`ImportError`, and:
+2. The user does not pass ``exc_type`` explicitly.
+
+If the import attempt raises :class:`ModuleNotFoundError` (the usual case), then the module is skipped and no
+warning is emitted.
+
+This way, the usual cases will keep working the same way, while unexpected errors will now issue a warning, with
+users being able to suppress the warning by passing ``exc_type=ImportError`` explicitly.
+
+In ``9.0``, the warning will turn into an error, and in ``9.1`` :func:`pytest.importorskip` will only capture
+:class:`ModuleNotFoundError` by default and no warnings will be issued anymore -- but users can still capture
+:class:`ImportError` by passing it to ``exc_type``.
+
+
+.. _node-ctor-fspath-deprecation:
+
+``fspath`` argument for Node constructors replaced with ``pathlib.Path``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 7.0
+
+In order to support the transition from ``py.path.local`` to :mod:`pathlib`,
+the ``fspath`` argument to :class:`~_pytest.nodes.Node` constructors like
+:func:`pytest.Function.from_parent()` and :func:`pytest.Class.from_parent()`
+is now deprecated.
+
+Plugins which construct nodes should pass the ``path`` argument, of type
+:class:`pathlib.Path`, instead of the ``fspath`` argument.
+
+Plugins which implement custom items and collectors are encouraged to replace
+``fspath`` parameters (``py.path.local``) with ``path`` parameters
+(``pathlib.Path``), and drop any other usage of the ``py`` library if possible.
+
+If possible, plugins with custom items should use :ref:`cooperative
+constructors <uncooperative-constructors-deprecated>` to avoid hardcoding
+arguments they only pass on to the superclass.
+
+.. note::
+    The name of the :class:`~_pytest.nodes.Node` arguments and attributes (the
+    new attribute being ``path``) is **the opposite** of the situation for
+    hooks, :ref:`outlined below <legacy-path-hooks-deprecated>` (the old
+    argument being ``path``).
+
+    This is an unfortunate artifact due to historical reasons, which should be
+    resolved in future versions as we slowly get rid of the :pypi:`py`
+    dependency (see :issue:`9283` for a longer discussion).
+
+Due to the ongoing migration of methods like :meth:`~pytest.Item.reportinfo`
+which still is expected to return a ``py.path.local`` object, nodes still have
+both ``fspath`` (``py.path.local``) and ``path`` (``pathlib.Path``) attributes,
+no matter what argument was used in the constructor. We expect to deprecate the
+``fspath`` attribute in a future release.
+
 
 Configuring hook specs/impls using markers
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -61,6 +130,33 @@ Changed ``hookwrapper`` attributes:
 * ``firstresult``
 * ``historic``
 
+
+.. _legacy-path-hooks-deprecated:
+
+``py.path.local`` arguments for hooks replaced with ``pathlib.Path``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 7.0
+
+In order to support the transition from ``py.path.local`` to :mod:`pathlib`, the following hooks now receive additional arguments:
+
+*  :hook:`pytest_ignore_collect(collection_path: pathlib.Path) <pytest_ignore_collect>` as equivalent to ``path``
+*  :hook:`pytest_collect_file(file_path: pathlib.Path) <pytest_collect_file>` as equivalent to ``path``
+*  :hook:`pytest_pycollect_makemodule(module_path: pathlib.Path) <pytest_pycollect_makemodule>` as equivalent to ``path``
+*  :hook:`pytest_report_header(start_path: pathlib.Path) <pytest_report_header>` as equivalent to ``startdir``
+*  :hook:`pytest_report_collectionfinish(start_path: pathlib.Path) <pytest_report_collectionfinish>` as equivalent to ``startdir``
+
+The accompanying ``py.path.local`` based paths have been deprecated: plugins which manually invoke those hooks should only pass the new ``pathlib.Path`` arguments, and users should change their hook implementations to use the new ``pathlib.Path`` arguments.
+
+.. note::
+    The name of the :class:`~_pytest.nodes.Node` arguments and attributes,
+    :ref:`outlined above <node-ctor-fspath-deprecation>` (the new attribute
+    being ``path``) is **the opposite** of the situation for hooks (the old
+    argument being ``path``).
+
+    This is an unfortunate artifact due to historical reasons, which should be
+    resolved in future versions as we slowly get rid of the :pypi:`py`
+    dependency (see :issue:`9283` for a longer discussion).
 
 Directly constructing internal classes
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -155,7 +251,7 @@ Returning non-None value in test functions
 
 .. deprecated:: 7.2
 
-A :class:`pytest.PytestReturnNotNoneWarning` is now emitted if a test function returns something other than `None`.
+A ``pytest.PytestReturnNotNoneWarning`` is now emitted if a test function returns something other than `None`.
 
 This prevents a common mistake among beginners that expect that returning a `bool` would cause a test to pass or fail, for example:
 
@@ -207,73 +303,6 @@ As stated in our :ref:`backwards-compatibility` policy, deprecated features are 
 an appropriate period of deprecation has passed.
 
 Some breaking changes which could not be deprecated are also listed.
-
-.. _node-ctor-fspath-deprecation:
-
-``fspath`` argument for Node constructors replaced with ``pathlib.Path``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. deprecated:: 7.0
-
-In order to support the transition from ``py.path.local`` to :mod:`pathlib`,
-the ``fspath`` argument to :class:`~_pytest.nodes.Node` constructors like
-:func:`pytest.Function.from_parent()` and :func:`pytest.Class.from_parent()`
-is now deprecated.
-
-Plugins which construct nodes should pass the ``path`` argument, of type
-:class:`pathlib.Path`, instead of the ``fspath`` argument.
-
-Plugins which implement custom items and collectors are encouraged to replace
-``fspath`` parameters (``py.path.local``) with ``path`` parameters
-(``pathlib.Path``), and drop any other usage of the ``py`` library if possible.
-
-If possible, plugins with custom items should use :ref:`cooperative
-constructors <uncooperative-constructors-deprecated>` to avoid hardcoding
-arguments they only pass on to the superclass.
-
-.. note::
-    The name of the :class:`~_pytest.nodes.Node` arguments and attributes (the
-    new attribute being ``path``) is **the opposite** of the situation for
-    hooks, :ref:`outlined below <legacy-path-hooks-deprecated>` (the old
-    argument being ``path``).
-
-    This is an unfortunate artifact due to historical reasons, which should be
-    resolved in future versions as we slowly get rid of the :pypi:`py`
-    dependency (see :issue:`9283` for a longer discussion).
-
-Due to the ongoing migration of methods like :meth:`~pytest.Item.reportinfo`
-which still is expected to return a ``py.path.local`` object, nodes still have
-both ``fspath`` (``py.path.local``) and ``path`` (``pathlib.Path``) attributes,
-no matter what argument was used in the constructor. We expect to deprecate the
-``fspath`` attribute in a future release.
-
-
-``py.path.local`` arguments for hooks replaced with ``pathlib.Path``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. deprecated:: 7.0
-.. versionremoved:: 8.0
-
-In order to support the transition from ``py.path.local`` to :mod:`pathlib`, the following hooks now receive additional arguments:
-
-*  :hook:`pytest_ignore_collect(collection_path: pathlib.Path) <pytest_ignore_collect>` as equivalent to ``path``
-*  :hook:`pytest_collect_file(file_path: pathlib.Path) <pytest_collect_file>` as equivalent to ``path``
-*  :hook:`pytest_pycollect_makemodule(module_path: pathlib.Path) <pytest_pycollect_makemodule>` as equivalent to ``path``
-*  :hook:`pytest_report_header(start_path: pathlib.Path) <pytest_report_header>` as equivalent to ``startdir``
-*  :hook:`pytest_report_collectionfinish(start_path: pathlib.Path) <pytest_report_collectionfinish>` as equivalent to ``startdir``
-
-The accompanying ``py.path.local`` based paths have been deprecated: plugins which manually invoke those hooks should only pass the new ``pathlib.Path`` arguments, and users should change their hook implementations to use the new ``pathlib.Path`` arguments.
-
-.. note::
-    The name of the :class:`~_pytest.nodes.Node` arguments and attributes,
-    :ref:`outlined above <node-ctor-fspath-deprecation>` (the new attribute
-    being ``path``) is **the opposite** of the situation for hooks (the old
-    argument being ``path``).
-
-    This is an unfortunate artifact due to historical reasons, which should be
-    resolved in future versions as we slowly get rid of the :pypi:`py`
-    dependency (see :issue:`9283` for a longer discussion).
-
 
 .. _nose-deprecation:
 
@@ -429,7 +458,7 @@ Now :class:`~pytest.Class` collects the test methods directly.
 Most plugins which reference ``Instance`` do so in order to ignore or skip it,
 using a check such as ``if isinstance(node, Instance): return``.
 Such plugins should simply remove consideration of ``Instance`` on pytest>=7.
-However, to keep such uses working, a dummy type has been instanted in ``pytest.Instance`` and ``_pytest.python.Instance``,
+However, to keep such uses working, a dummy type has been instanced in ``pytest.Instance`` and ``_pytest.python.Instance``,
 and importing it emits a deprecation warning. This was removed in pytest 8.
 
 

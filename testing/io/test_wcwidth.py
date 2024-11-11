@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from _pytest._io.wcwidth import wcswidth
 from _pytest._io.wcwidth import wcwidth
 import pytest
@@ -11,8 +13,8 @@ import pytest
         ("a", 1),
         ("1", 1),
         ("א", 1),
-        ("\u200B", 0),
-        ("\u1ABE", 0),
+        ("\u200b", 0),
+        ("\u1abe", 0),
         ("\u0591", 0),
         ("🉐", 2),
         ("＄", 2),  # noqa: RUF001

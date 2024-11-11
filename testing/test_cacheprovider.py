@@ -1,10 +1,15 @@
-# mypy: allow-untyped-defs
+from __future__ import annotations
+
+from enum import auto
+from enum import Enum
 import os
 from pathlib import Path
 import shutil
+from typing import Any
 from typing import Generator
-from typing import List
+from typing import Sequence
 
+from _pytest.compat import assert_never
 from _pytest.config import ExitCode
 from _pytest.monkeypatch import MonkeyPatch
 from _pytest.pytester import Pytester
@@ -26,6 +31,21 @@ class TestNewAPI:
         p = config.cache.mkdir("name")
         assert p.is_dir()
 
+    def test_cache_dir_permissions(self, pytester: Pytester) -> None:
+        """The .pytest_cache directory should have world-readable permissions
+        (depending on umask).
+
+        Regression test for #12308.
+        """
+        pytester.makeini("[pytest]")
+        config = pytester.parseconfigure()
+        assert config.cache is not None
+        p = config.cache.mkdir("name")
+        assert p.is_dir()
+        # Instead of messing with umask, make sure .pytest_cache has the same
+        # permissions as the default that `mkdir` gives `p`.
+        assert (p.parent.stat().st_mode & 0o777) == (p.stat().st_mode & 0o777)
+
     def test_config_cache_dataerror(self, pytester: Pytester) -> None:
         pytester.makeini("[pytest]")
         config = pytester.parseconfigure()
@@ -38,7 +58,7 @@ class TestNewAPI:
         assert val == -2
 
     @pytest.mark.filterwarnings("ignore:could not create cache path")
-    def test_cache_writefail_cachfile_silent(self, pytester: Pytester) -> None:
+    def test_cache_writefail_cachefile_silent(self, pytester: Pytester) -> None:
         pytester.makeini("[pytest]")
         pytester.path.joinpath(".pytest_cache").write_text(
             "gone wrong", encoding="utf-8"
@@ -49,7 +69,7 @@ class TestNewAPI:
         cache.set("test/broken", [])
 
     @pytest.fixture
-    def unwritable_cache_dir(self, pytester: Pytester) -> Generator[Path, None, None]:
+    def unwritable_cache_dir(self, pytester: Pytester) -> Generator[Path]:
         cache_dir = pytester.path.joinpath(".pytest_cache")
         cache_dir.mkdir()
         mode = cache_dir.stat().st_mode
@@ -174,8 +194,10 @@ class TestNewAPI:
         assert pytester.path.joinpath("custom_cache_dir").is_dir()
 
 
-@pytest.mark.parametrize("env", ((), ("TOX_ENV_DIR", "/tox_env_dir")))
-def test_cache_reportheader(env, pytester: Pytester, monkeypatch: MonkeyPatch) -> None:
+@pytest.mark.parametrize("env", ((), ("TOX_ENV_DIR", "mydir/tox-env")))
+def test_cache_reportheader(
+    env: Sequence[str], pytester: Pytester, monkeypatch: MonkeyPatch
+) -> None:
     pytester.makepyfile("""def test_foo(): pass""")
     if env:
         monkeypatch.setenv(*env)
@@ -184,7 +206,7 @@ def test_cache_reportheader(env, pytester: Pytester, monkeypatch: MonkeyPatch) -
         monkeypatch.delenv("TOX_ENV_DIR", raising=False)
         expected = ".pytest_cache"
     result = pytester.runpytest("-v")
-    result.stdout.fnmatch_lines(["cachedir: %s" % expected])
+    result.stdout.fnmatch_lines([f"cachedir: {expected}"])
 
 
 def test_cache_reportheader_external_abspath(
@@ -507,7 +529,7 @@ class TestLastFailed:
         """
         )
 
-        def rlf(fail_import, fail_run):
+        def rlf(fail_import: int, fail_run: int) -> Any:
             monkeypatch.setenv("FAILIMPORT", str(fail_import))
             monkeypatch.setenv("FAILTEST", str(fail_run))
 
@@ -555,7 +577,9 @@ class TestLastFailed:
         """
         )
 
-        def rlf(fail_import, fail_run, args=()):
+        def rlf(
+            fail_import: int, fail_run: int, args: Sequence[str] = ()
+        ) -> tuple[Any, Any]:
             monkeypatch.setenv("FAILIMPORT", str(fail_import))
             monkeypatch.setenv("FAILTEST", str(fail_run))
 
@@ -669,7 +693,7 @@ class TestLastFailed:
         else:
             assert "rerun previous" in result.stdout.str()
 
-    def get_cached_last_failed(self, pytester: Pytester) -> List[str]:
+    def get_cached_last_failed(self, pytester: Pytester) -> list[str]:
         config = pytester.parseconfigure()
         assert config.cache is not None
         return sorted(config.cache.get("cache/lastfailed", {}))
@@ -1139,7 +1163,7 @@ class TestNewFirst:
         )
 
         p1.write_text(
-            "def test_1(): assert 1\n" "def test_2(): assert 1\n", encoding="utf-8"
+            "def test_1(): assert 1\ndef test_2(): assert 1\n", encoding="utf-8"
         )
         os.utime(p1, ns=(p1.stat().st_atime_ns, int(1e9)))
 
@@ -1254,20 +1278,41 @@ class TestReadme:
         assert self.check_readme(pytester) is True
 
 
-def test_gitignore(pytester: Pytester) -> None:
+class Action(Enum):
+    """Action to perform on the cache directory."""
+
+    MKDIR = auto()
+    SET = auto()
+
+
+@pytest.mark.parametrize("action", list(Action))
+def test_gitignore(
+    pytester: Pytester,
+    action: Action,
+) -> None:
     """Ensure we automatically create .gitignore file in the pytest_cache directory (#3286)."""
     from _pytest.cacheprovider import Cache
 
     config = pytester.parseconfig()
     cache = Cache.for_config(config, _ispytest=True)
-    cache.set("foo", "bar")
+    if action == Action.MKDIR:
+        cache.mkdir("foo")
+    elif action == Action.SET:
+        cache.set("foo", "bar")
+    else:
+        assert_never(action)
     msg = "# Created by pytest automatically.\n*\n"
     gitignore_path = cache._cachedir.joinpath(".gitignore")
     assert gitignore_path.read_text(encoding="UTF-8") == msg
 
     # Does not overwrite existing/custom one.
     gitignore_path.write_text("custom", encoding="utf-8")
-    cache.set("something", "else")
+    if action == Action.MKDIR:
+        cache.mkdir("something")
+    elif action == Action.SET:
+        cache.set("something", "else")
+    else:
+        assert_never(action)
     assert gitignore_path.read_text(encoding="UTF-8") == "custom"
 
 

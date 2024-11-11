@@ -1,5 +1,8 @@
 # PYTHON_ARGCOMPLETE_OK
 """pytest: unit and functional testing with Python."""
+
+from __future__ import annotations
+
 from _pytest import __version__
 from _pytest import version_tuple
 from _pytest._code import ExceptionInfo
@@ -65,6 +68,7 @@ from _pytest.reports import TestReport
 from _pytest.runner import CallInfo
 from _pytest.stash import Stash
 from _pytest.stash import StashKey
+from _pytest.terminal import TerminalReporter
 from _pytest.terminal import TestShortLogReport
 from _pytest.tmpdir import TempPathFactory
 from _pytest.warning_types import PytestAssertRewriteWarning
@@ -74,8 +78,6 @@ from _pytest.warning_types import PytestConfigWarning
 from _pytest.warning_types import PytestDeprecationWarning
 from _pytest.warning_types import PytestExperimentalApiWarning
 from _pytest.warning_types import PytestRemovedIn9Warning
-from _pytest.warning_types import PytestReturnNotNoneWarning
-from _pytest.warning_types import PytestUnhandledCoroutineWarning
 from _pytest.warning_types import PytestUnhandledThreadExceptionWarning
 from _pytest.warning_types import PytestUnknownMarkWarning
 from _pytest.warning_types import PytestUnraisableExceptionWarning
@@ -138,10 +140,8 @@ __all__ = [
     "PytestDeprecationWarning",
     "PytestExperimentalApiWarning",
     "PytestRemovedIn9Warning",
-    "PytestReturnNotNoneWarning",
     "Pytester",
     "PytestPluginManager",
-    "PytestUnhandledCoroutineWarning",
     "PytestUnhandledThreadExceptionWarning",
     "PytestUnknownMarkWarning",
     "PytestUnraisableExceptionWarning",
@@ -158,6 +158,7 @@ __all__ = [
     "version_tuple",
     "TempdirFactory",
     "TempPathFactory",
+    "TerminalReporter",
     "Testdir",
     "TestReport",
     "TestShortLogReport",

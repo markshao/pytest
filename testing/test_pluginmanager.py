@@ -1,9 +1,10 @@
 # mypy: allow-untyped-defs
+from __future__ import annotations
+
 import os
 import shutil
 import sys
 import types
-from typing import List
 
 from _pytest.config import Config
 from _pytest.config import ExitCode
@@ -46,7 +47,10 @@ class TestPytestPluginInteractions:
             kwargs=dict(pluginmanager=config.pluginmanager)
         )
         config.pluginmanager._importconftest(
-            conf, importmode="prepend", rootpath=pytester.path
+            conf,
+            importmode="prepend",
+            rootpath=pytester.path,
+            consider_namespace_packages=False,
         )
         # print(config.pluginmanager.get_plugins())
         res = config.hook.pytest_myhook(xyz=10)
@@ -75,7 +79,10 @@ class TestPytestPluginInteractions:
         """
         )
         config.pluginmanager._importconftest(
-            p, importmode="prepend", rootpath=pytester.path
+            p,
+            importmode="prepend",
+            rootpath=pytester.path,
+            consider_namespace_packages=False,
         )
         assert config.option.test123
 
@@ -115,6 +122,7 @@ class TestPytestPluginInteractions:
             conftest,
             importmode="prepend",
             rootpath=pytester.path,
+            consider_namespace_packages=False,
         )
         plugin = config.pluginmanager.get_plugin(str(conftest))
         assert plugin is mod
@@ -123,6 +131,7 @@ class TestPytestPluginInteractions:
             conftest_upper_case,
             importmode="prepend",
             rootpath=pytester.path,
+            consider_namespace_packages=False,
         )
         plugin_uppercase = config.pluginmanager.get_plugin(str(conftest_upper_case))
         assert plugin_uppercase is mod_uppercase
@@ -144,7 +153,7 @@ class TestPytestPluginInteractions:
                 saveindent.append(pytestpm.trace.root.indent)
                 raise ValueError()
 
-        values: List[str] = []
+        values: list[str] = []
         pytestpm.trace.root.setwriter(values.append)
         undo = pytestpm.enable_tracing()
         try:
@@ -174,12 +183,18 @@ class TestPytestPluginInteractions:
         conftest2 = pytester.path.joinpath("tests/subdir/conftest.py")
 
         config.pluginmanager._importconftest(
-            conftest1, importmode="prepend", rootpath=pytester.path
+            conftest1,
+            importmode="prepend",
+            rootpath=pytester.path,
+            consider_namespace_packages=False,
         )
         ihook_a = session.gethookproxy(pytester.path / "tests")
         assert ihook_a is not None
         config.pluginmanager._importconftest(
-            conftest2, importmode="prepend", rootpath=pytester.path
+            conftest2,
+            importmode="prepend",
+            rootpath=pytester.path,
+            consider_namespace_packages=False,
         )
         ihook_b = session.gethookproxy(pytester.path / "tests")
         assert ihook_a is not ihook_b
@@ -398,13 +413,15 @@ class TestPytestPluginManager:
         pytestpm: PytestPluginManager,
     ) -> None:
         mod = import_path(
-            pytester.makepyfile("pytest_plugins='xyz'"), root=pytester.path
+            pytester.makepyfile("pytest_plugins='xyz'"),
+            root=pytester.path,
+            consider_namespace_packages=False,
         )
         with pytest.raises(ImportError):
             pytestpm.consider_conftest(mod, registration_name="unused")
 
 
-class TestPytestPluginManagerBootstrapming:
+class TestPytestPluginManagerBootstrapping:
     def test_preparse_args(self, pytestpm: PytestPluginManager) -> None:
         pytest.raises(
             ImportError, lambda: pytestpm.consider_preparse(["xyz", "-p", "hello123"])
@@ -430,7 +447,7 @@ class TestPytestPluginManagerBootstrapming:
         assert len(l2) == len(l1)
         assert 42 not in l2
 
-    def test_plugin_prevent_register_unregistered_alredy_registered(
+    def test_plugin_prevent_register_unregistered_already_registered(
         self, pytestpm: PytestPluginManager
     ) -> None:
         pytestpm.register(42, name="abc")

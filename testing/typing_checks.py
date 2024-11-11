@@ -4,6 +4,9 @@
 This file is not executed, it is only checked by mypy to ensure that
 none of the code triggers any mypy errors.
 """
+
+from __future__ import annotations
+
 import contextlib
 from typing import Optional
 

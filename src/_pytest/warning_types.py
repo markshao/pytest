@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 import dataclasses
 import inspect
 from types import FunctionType
 from typing import Any
 from typing import final
 from typing import Generic
-from typing import Type
 from typing import TypeVar
 import warnings
 
@@ -55,12 +56,6 @@ class PytestRemovedIn9Warning(PytestDeprecationWarning):
     __module__ = "pytest"
 
 
-class PytestReturnNotNoneWarning(PytestWarning):
-    """Warning emitted when a test function is returning value other than None."""
-
-    __module__ = "pytest"
-
-
 @final
 class PytestExperimentalApiWarning(PytestWarning, FutureWarning):
     """Warning category used to denote experiments in pytest.
@@ -72,20 +67,8 @@ class PytestExperimentalApiWarning(PytestWarning, FutureWarning):
     __module__ = "pytest"
 
     @classmethod
-    def simple(cls, apiname: str) -> "PytestExperimentalApiWarning":
+    def simple(cls, apiname: str) -> PytestExperimentalApiWarning:
         return cls(f"{apiname} is an experimental api that may change over time")
-
-
-@final
-class PytestUnhandledCoroutineWarning(PytestReturnNotNoneWarning):
-    """Warning emitted for an unhandled coroutine.
-
-    A coroutine was encountered when collecting test functions, but was not
-    handled by any async-aware plugin.
-    Coroutine test functions are not natively supported.
-    """
-
-    __module__ = "pytest"
 
 
 @final
@@ -132,7 +115,7 @@ class UnformattedWarning(Generic[_W]):
     as opposed to a direct message.
     """
 
-    category: Type["_W"]
+    category: type[_W]
     template: str
 
     def format(self, **kwargs: Any) -> _W:

@@ -1,11 +1,13 @@
 # mypy: allow-untyped-defs
+from __future__ import annotations
+
 from pathlib import Path
 import re
 from typing import cast
-from typing import Type
 import warnings
 
 from _pytest import nodes
+from _pytest.compat import legacy_path
 from _pytest.outcomes import OutcomeException
 from _pytest.pytester import Pytester
 from _pytest.warning_types import PytestWarning
@@ -44,9 +46,9 @@ def test_subclassing_both_item_and_collector_deprecated(
         warnings.simplefilter("error")
 
         class SoWrong(nodes.Item, nodes.File):
-            def __init__(self, path, parent):
+            def __init__(self, fspath, parent):
                 """Legacy ctor with legacy call # don't wana see"""
-                super().__init__(parent, path)
+                super().__init__(fspath, parent)
 
             def collect(self):
                 raise NotImplementedError()
@@ -55,7 +57,9 @@ def test_subclassing_both_item_and_collector_deprecated(
                 raise NotImplementedError()
 
     with pytest.warns(PytestWarning) as rec:
-        SoWrong.from_parent(request.session, path=tmp_path / "broken.txt", wrong=10)
+        SoWrong.from_parent(
+            request.session, fspath=legacy_path(tmp_path / "broken.txt")
+        )
     messages = [str(x.message) for x in rec]
     assert any(
         re.search(".*SoWrong.* not using a cooperative constructor.*", x)
@@ -70,7 +74,7 @@ def test_subclassing_both_item_and_collector_deprecated(
     "warn_type, msg", [(DeprecationWarning, "deprecated"), (PytestWarning, "pytest")]
 )
 def test_node_warn_is_no_longer_only_pytest_warnings(
-    pytester: Pytester, warn_type: Type[Warning], msg: str
+    pytester: Pytester, warn_type: type[Warning], msg: str
 ) -> None:
     items = pytester.getitems(
         """

@@ -1,4 +1,6 @@
 # mypy: allow-untyped-defs
+from __future__ import annotations
+
 import os
 from pathlib import Path
 import sys
@@ -74,6 +76,16 @@ def test_getfuncargnames_staticmethod_inherited() -> None:
     assert getfuncargnames(B.static, cls=B) == ("arg1", "arg2")
 
 
+@pytest.mark.skipif(
+    sys.version_info >= (3, 13),
+    reason="""\
+In python 3.13, this will raise FutureWarning:
+functools.partial will be a method descriptor in future Python versions;
+wrap it in staticmethod() if you want to preserve the old behavior
+
+But the wrapped 'functools.partial' is tested by 'test_getfuncargnames_staticmethod_partial' below.
+""",
+)
 def test_getfuncargnames_partial():
     """Check getfuncargnames for methods defined with functools.partial (#5701)"""
     import functools
@@ -932,8 +944,9 @@ class TestRequestBasic:
         self, pytester: Pytester
     ) -> None:
         """
-        Ensure exceptions raised during teardown by a finalizer are suppressed
-        until all finalizers are called, re-raising the first exception (#2440)
+        Ensure exceptions raised during teardown by finalizers are suppressed
+        until all finalizers are called, then re-raised together in an
+        exception group (#2440)
         """
         pytester.makepyfile(
             """
@@ -960,8 +973,16 @@ class TestRequestBasic:
         """
         )
         result = pytester.runpytest()
+        result.assert_outcomes(passed=2, errors=1)
         result.stdout.fnmatch_lines(
-            ["*Exception: Error in excepts fixture", "* 2 passed, 1 error in *"]
+            [
+                '  | *ExceptionGroup: errors while tearing down fixture "subrequest" of <Function test_first> (2 sub-exceptions)',  # noqa: E501
+                "  +-+---------------- 1 ----------------",
+                "    | Exception: Error in something fixture",
+                "    +---------------- 2 ----------------",
+                "    | Exception: Error in excepts fixture",
+                "    +------------------------------------",
+            ],
         )
 
     def test_request_getmodulepath(self, pytester: Pytester) -> None:
@@ -1238,8 +1259,9 @@ class TestFixtureUsages:
         result = pytester.runpytest()
         result.stdout.fnmatch_lines(
             [
-                "*ScopeMismatch*involved factories*",
+                "*ScopeMismatch*Requesting fixture stack*",
                 "test_receives_funcargs_scope_mismatch.py:6:  def arg2(arg1)",
+                "Requested fixture:",
                 "test_receives_funcargs_scope_mismatch.py:2:  def arg1()",
                 "*1 error*",
             ]
@@ -1265,7 +1287,13 @@ class TestFixtureUsages:
         )
         result = pytester.runpytest()
         result.stdout.fnmatch_lines(
-            ["*ScopeMismatch*involved factories*", "* def arg2*", "*1 error*"]
+            [
+                "*ScopeMismatch*Requesting fixture stack*",
+                "* def arg2(arg1)",
+                "Requested fixture:",
+                "* def arg1()",
+                "*1 error*",
+            ],
         )
 
     def test_invalid_scope(self, pytester: Pytester) -> None:
@@ -1528,6 +1556,38 @@ class TestFixtureUsages:
         )
         result = pytester.runpytest()
         result.stdout.fnmatch_lines(["* 2 passed in *"])
+
+    def test_parameterized_fixture_caching(self, pytester: Pytester) -> None:
+        """Regression test for #12600."""
+        pytester.makepyfile(
+            """
+            import pytest
+            from itertools import count
+
+            CACHE_MISSES = count(0)
+
+            def pytest_generate_tests(metafunc):
+                if "my_fixture" in metafunc.fixturenames:
+                    # Use unique objects for parametrization (as opposed to small strings
+                    # and small integers which are singletons).
+                    metafunc.parametrize("my_fixture", [[1], [2]], indirect=True)
+
+            @pytest.fixture(scope='session')
+            def my_fixture(request):
+                next(CACHE_MISSES)
+
+            def test1(my_fixture):
+                pass
+
+            def test2(my_fixture):
+                pass
+
+            def teardown_module():
+                assert next(CACHE_MISSES) == 2
+            """
+        )
+        result = pytester.runpytest()
+        result.stdout.no_fnmatch_line("* ERROR at teardown *")
 
 
 class TestFixtureManagerParseFactories:
@@ -2203,6 +2263,25 @@ class TestAutouseManagement:
         reprec = pytester.inline_run("-s")
         reprec.assertoutcome(passed=2)
 
+    def test_reordering_catastrophic_performance(self, pytester: Pytester) -> None:
+        """Check that a certain high-scope parametrization pattern doesn't cause
+        a catasrophic slowdown.
+
+        Regression test for #12355.
+        """
+        pytester.makepyfile("""
+            import pytest
+
+            params = tuple("abcdefghijklmnopqrstuvwxyz")
+            @pytest.mark.parametrize(params, [range(len(params))] * 3, scope="module")
+            def test_parametrize(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t, u, v, w, x, y, z):
+                pass
+        """)
+
+        result = pytester.runpytest()
+
+        result.assert_outcomes(passed=3)
+
 
 class TestFixtureMarker:
     def test_parametrize(self, pytester: Pytester) -> None:
@@ -2252,18 +2331,17 @@ class TestFixtureMarker:
         This was a regression introduced in the fix for #736.
         """
         pytester.makepyfile(
-            """
+            f"""
             import pytest
 
             @pytest.fixture(params=[1, 2])
             def fixt(request):
                 return request.param
 
-            @pytest.mark.parametrize(%s, [(3, 'x'), (4, 'x')])
+            @pytest.mark.parametrize({param_args}, [(3, 'x'), (4, 'x')])
             def test_foo(fixt, val):
                 pass
         """
-            % param_args
         )
         reprec = pytester.inline_run()
         reprec.assertoutcome(passed=2)
@@ -2479,8 +2557,10 @@ class TestFixtureMarker:
         assert result.ret == ExitCode.TESTS_FAILED
         result.stdout.fnmatch_lines(
             [
-                "*ScopeMismatch*involved factories*",
+                "*ScopeMismatch*Requesting fixture stack*",
                 "test_it.py:6:  def fixmod(fixfunc)",
+                "Requested fixture:",
+                "test_it.py:3:  def fixfunc()",
             ]
         )
 
@@ -2916,7 +2996,7 @@ class TestFixtureMarker:
             *3 passed*
         """
         )
-        result.stdout.no_fnmatch_line("*error*")
+        assert result.ret == 0
 
     def test_fixture_finalizer(self, pytester: Pytester) -> None:
         pytester.makeconftest(
@@ -3378,6 +3458,28 @@ class TestErrors:
         result.stdout.fnmatch_lines(
             ["*def gen(qwe123):*", "*fixture*qwe123*not found*", "*1 error*"]
         )
+
+    def test_cached_exception_doesnt_get_longer(self, pytester: Pytester) -> None:
+        """Regression test for #12204."""
+        pytester.makepyfile(
+            """
+            import pytest
+            @pytest.fixture(scope="session")
+            def bad(): 1 / 0
+
+            def test_1(bad): pass
+            def test_2(bad): pass
+            def test_3(bad): pass
+            """
+        )
+
+        result = pytester.runpytest_inprocess("--tb=native")
+        assert result.ret == ExitCode.TESTS_FAILED
+        failures = result.reprec.getfailures()  # type: ignore[attr-defined]
+        assert len(failures) == 3
+        lines1 = failures[1].longrepr.reprtraceback.reprentries[0].lines
+        lines2 = failures[2].longrepr.reprtraceback.reprentries[0].lines
+        assert len(lines1) == len(lines2)
 
 
 class TestShowFixtures:
@@ -4235,6 +4337,39 @@ class TestScopeOrdering:
         request = TopRequest(items[0], _ispytest=True)
         assert request.fixturenames == "s1 p1 m1 m2 c1 f2 f1".split()
 
+    def test_parametrized_package_scope_reordering(self, pytester: Pytester) -> None:
+        """A parameterized package-scoped fixture correctly reorders items to
+        minimize setups & teardowns.
+
+        Regression test for #12328.
+        """
+        pytester.makepyfile(
+            __init__="",
+            conftest="""
+                import pytest
+                @pytest.fixture(scope="package", params=["a", "b"])
+                def fix(request):
+                    return request.param
+            """,
+            test_1="def test1(fix): pass",
+            test_2="def test2(fix): pass",
+        )
+
+        result = pytester.runpytest("--setup-plan")
+        assert result.ret == ExitCode.OK
+        result.stdout.fnmatch_lines(
+            [
+                "  SETUP    P fix['a']",
+                "        test_1.py::test1[a] (fixtures used: fix, request)",
+                "        test_2.py::test2[a] (fixtures used: fix, request)",
+                "  TEARDOWN P fix['a']",
+                "  SETUP    P fix['b']",
+                "        test_1.py::test1[b] (fixtures used: fix, request)",
+                "        test_2.py::test2[b] (fixtures used: fix, request)",
+                "  TEARDOWN P fix['b']",
+            ],
+        )
+
     def test_multiple_packages(self, pytester: Pytester) -> None:
         """Complex test involving multiple package fixtures. Make sure teardowns
         are executed in order.
@@ -4423,7 +4558,7 @@ def test_fixture_named_request(pytester: Pytester) -> None:
     result.stdout.fnmatch_lines(
         [
             "*'request' is a reserved word for fixtures, use another name:",
-            "  *test_fixture_named_request.py:6",
+            "  *test_fixture_named_request.py:8",
         ]
     )
 
@@ -4559,3 +4694,229 @@ def test_deduplicate_names() -> None:
     assert items == ("a", "b", "c", "d")
     items = deduplicate_names((*items, "g", "f", "g", "e", "b"))
     assert items == ("a", "b", "c", "d", "g", "f", "e")
+
+
+def test_staticmethod_classmethod_fixture_instance(pytester: Pytester) -> None:
+    """Ensure that static and class methods get and have access to a fresh
+    instance.
+
+    This also ensures `setup_method` works well with static and class methods.
+
+    Regression test for #12065.
+    """
+    pytester.makepyfile(
+        """
+        import pytest
+
+        class Test:
+            ran_setup_method = False
+            ran_fixture = False
+
+            def setup_method(self):
+                assert not self.ran_setup_method
+                self.ran_setup_method = True
+
+            @pytest.fixture(autouse=True)
+            def fixture(self):
+                assert not self.ran_fixture
+                self.ran_fixture = True
+
+            def test_method(self):
+                assert self.ran_setup_method
+                assert self.ran_fixture
+
+            @staticmethod
+            def test_1(request):
+                assert request.instance.ran_setup_method
+                assert request.instance.ran_fixture
+
+            @classmethod
+            def test_2(cls, request):
+                assert request.instance.ran_setup_method
+                assert request.instance.ran_fixture
+        """
+    )
+    result = pytester.runpytest()
+    assert result.ret == ExitCode.OK
+    result.assert_outcomes(passed=3)
+
+
+def test_scoped_fixture_caching(pytester: Pytester) -> None:
+    """Make sure setup and finalization is only run once when using scoped fixture
+    multiple times."""
+    pytester.makepyfile(
+        """
+        from __future__ import annotations
+
+        from typing import Generator
+
+        import pytest
+        executed: list[str] = []
+        @pytest.fixture(scope="class")
+        def fixture_1() -> Generator[None, None, None]:
+            executed.append("fix setup")
+            yield
+            executed.append("fix teardown")
+
+
+        class TestFixtureCaching:
+            def test_1(self, fixture_1: None) -> None:
+                assert executed == ["fix setup"]
+
+            def test_2(self, fixture_1: None) -> None:
+                assert executed == ["fix setup"]
+
+
+        def test_expected_setup_and_teardown() -> None:
+            assert executed == ["fix setup", "fix teardown"]
+        """
+    )
+    result = pytester.runpytest()
+    assert result.ret == 0
+
+
+def test_scoped_fixture_caching_exception(pytester: Pytester) -> None:
+    """Make sure setup & finalization is only run once for scoped fixture, with a cached exception."""
+    pytester.makepyfile(
+        """
+        from __future__ import annotations
+
+        import pytest
+        executed_crash: list[str] = []
+
+
+        @pytest.fixture(scope="class")
+        def fixture_crash(request: pytest.FixtureRequest) -> None:
+            executed_crash.append("fix_crash setup")
+
+            def my_finalizer() -> None:
+                executed_crash.append("fix_crash teardown")
+
+            request.addfinalizer(my_finalizer)
+
+            raise Exception("foo")
+
+
+        class TestFixtureCachingException:
+            @pytest.mark.xfail
+            def test_crash_1(self, fixture_crash: None) -> None:
+                ...
+
+            @pytest.mark.xfail
+            def test_crash_2(self, fixture_crash: None) -> None:
+                ...
+
+
+        def test_crash_expected_setup_and_teardown() -> None:
+            assert executed_crash == ["fix_crash setup", "fix_crash teardown"]
+        """
+    )
+    result = pytester.runpytest()
+    assert result.ret == 0
+
+
+def test_scoped_fixture_teardown_order(pytester: Pytester) -> None:
+    """
+    Make sure teardowns happen in reverse order of setup with scoped fixtures, when
+    a later test only depends on a subset of scoped fixtures.
+
+    Regression test for https://github.com/pytest-dev/pytest/issues/1489
+    """
+    pytester.makepyfile(
+        """
+        from typing import Generator
+
+        import pytest
+
+
+        last_executed = ""
+
+
+        @pytest.fixture(scope="module")
+        def fixture_1() -> Generator[None, None, None]:
+            global last_executed
+            assert last_executed == ""
+            last_executed = "fixture_1_setup"
+            yield
+            assert last_executed == "fixture_2_teardown"
+            last_executed = "fixture_1_teardown"
+
+
+        @pytest.fixture(scope="module")
+        def fixture_2() -> Generator[None, None, None]:
+            global last_executed
+            assert last_executed == "fixture_1_setup"
+            last_executed = "fixture_2_setup"
+            yield
+            assert last_executed == "run_test"
+            last_executed = "fixture_2_teardown"
+
+
+        def test_fixture_teardown_order(fixture_1: None, fixture_2: None) -> None:
+            global last_executed
+            assert last_executed == "fixture_2_setup"
+            last_executed = "run_test"
+
+
+        def test_2(fixture_1: None) -> None:
+            # This would previously queue an additional teardown of fixture_1,
+            # despite fixture_1's value being cached, which caused fixture_1 to be
+            # torn down before fixture_2 - violating the rule that teardowns should
+            # happen in reverse order of setup.
+            pass
+        """
+    )
+    result = pytester.runpytest()
+    assert result.ret == 0
+
+
+def test_subfixture_teardown_order(pytester: Pytester) -> None:
+    """
+    Make sure fixtures don't re-register their finalization in parent fixtures multiple
+    times, causing ordering failure in their teardowns.
+
+    Regression test for #12135
+    """
+    pytester.makepyfile(
+        """
+        import pytest
+
+        execution_order = []
+
+        @pytest.fixture(scope="class")
+        def fixture_1():
+            ...
+
+        @pytest.fixture(scope="class")
+        def fixture_2(fixture_1):
+            execution_order.append("setup 2")
+            yield
+            execution_order.append("teardown 2")
+
+        @pytest.fixture(scope="class")
+        def fixture_3(fixture_1):
+            execution_order.append("setup 3")
+            yield
+            execution_order.append("teardown 3")
+
+        class TestFoo:
+            def test_initialize_fixtures(self, fixture_2, fixture_3):
+                ...
+
+            # This would previously reschedule fixture_2's finalizer in the parent fixture,
+            # causing it to be torn down before fixture 3.
+            def test_reschedule_fixture_2(self, fixture_2):
+                ...
+
+            # Force finalization directly on fixture_1
+            # Otherwise the cleanup would sequence 3&2 before 1 as normal.
+            @pytest.mark.parametrize("fixture_1", [None], indirect=["fixture_1"])
+            def test_finalize_fixture_1(self, fixture_1):
+                ...
+
+        def test_result():
+            assert execution_order == ["setup 2", "setup 3", "teardown 3", "teardown 2"]
+        """
+    )
+    result = pytester.runpytest()
+    assert result.ret == 0

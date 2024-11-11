@@ -1,7 +1,10 @@
 # mypy: allow-untyped-defs
+from __future__ import annotations
+
 import dataclasses
 import importlib.metadata
 import os
+from pathlib import Path
 import subprocess
 import sys
 import types
@@ -399,7 +402,7 @@ class TestGeneralUsage:
 
         for name, value in vars(hookspec).items():
             if name.startswith("pytest_"):
-                assert value.__doc__, "no docstring for %s" % name
+                assert value.__doc__, f"no docstring for {name}"
 
     def test_initialization_error_issue49(self, pytester: Pytester) -> None:
         pytester.makeconftest(
@@ -540,6 +543,32 @@ class TestGeneralUsage:
         )
         res = pytester.runpytest(p)
         res.assert_outcomes(passed=3)
+
+    # Warning ignore because of:
+    # https://github.com/python/cpython/issues/85308
+    # Can be removed once Python<3.12 support is dropped.
+    @pytest.mark.filterwarnings("ignore:'encoding' argument not specified")
+    def test_command_line_args_from_file(
+        self, pytester: Pytester, tmp_path: Path
+    ) -> None:
+        pytester.makepyfile(
+            test_file="""
+            import pytest
+
+            class TestClass:
+                @pytest.mark.parametrize("a", ["x","y"])
+                def test_func(self, a):
+                    pass
+            """
+        )
+        tests = [
+            "test_file.py::TestClass::test_func[x]",
+            "test_file.py::TestClass::test_func[y]",
+            "-q",
+        ]
+        args_file = pytester.maketxtfile(tests="\n".join(tests))
+        result = pytester.runpytest(f"@{args_file}")
+        result.assert_outcomes(failed=0, passed=2)
 
 
 class TestInvocationVariants:
@@ -946,7 +975,7 @@ class TestDurations:
         for x in tested:
             for y in ("call",):  # 'setup', 'call', 'teardown':
                 for line in result.stdout.lines:
-                    if ("test_%s" % x) in line and y in line:
+                    if (f"test_{x}") in line and y in line:
                         break
                 else:
                     raise AssertionError(f"not found {x} {y}")
@@ -959,7 +988,7 @@ class TestDurations:
         for x in "123":
             for y in ("call",):  # 'setup', 'call', 'teardown':
                 for line in result.stdout.lines:
-                    if ("test_%s" % x) in line and y in line:
+                    if (f"test_{x}") in line and y in line:
                         break
                 else:
                     raise AssertionError(f"not found {x} {y}")
@@ -1206,7 +1235,7 @@ def test_usage_error_code(pytester: Pytester) -> None:
     assert result.ret == ExitCode.USAGE_ERROR
 
 
-def test_warn_on_async_function(pytester: Pytester) -> None:
+def test_error_on_async_function(pytester: Pytester) -> None:
     # In the below we .close() the coroutine only to avoid
     # "RuntimeWarning: coroutine 'test_2' was never awaited"
     # which messes with other tests.
@@ -1222,23 +1251,19 @@ def test_warn_on_async_function(pytester: Pytester) -> None:
             return coro
     """
     )
-    result = pytester.runpytest("-Wdefault")
+    result = pytester.runpytest()
     result.stdout.fnmatch_lines(
         [
-            "test_async.py::test_1",
-            "test_async.py::test_2",
-            "test_async.py::test_3",
             "*async def functions are not natively supported*",
-            "*3 skipped, 3 warnings in*",
+            "*test_async.py::test_1*",
+            "*test_async.py::test_2*",
+            "*test_async.py::test_3*",
         ]
     )
-    # ensure our warning message appears only once
-    assert (
-        result.stdout.str().count("async def functions are not natively supported") == 1
-    )
+    result.assert_outcomes(failed=3)
 
 
-def test_warn_on_async_gen_function(pytester: Pytester) -> None:
+def test_error_on_async_gen_function(pytester: Pytester) -> None:
     pytester.makepyfile(
         test_async="""
         async def test_1():
@@ -1249,20 +1274,16 @@ def test_warn_on_async_gen_function(pytester: Pytester) -> None:
             return test_2()
     """
     )
-    result = pytester.runpytest("-Wdefault")
+    result = pytester.runpytest()
     result.stdout.fnmatch_lines(
         [
-            "test_async.py::test_1",
-            "test_async.py::test_2",
-            "test_async.py::test_3",
             "*async def functions are not natively supported*",
-            "*3 skipped, 3 warnings in*",
+            "*test_async.py::test_1*",
+            "*test_async.py::test_2*",
+            "*test_async.py::test_3*",
         ]
     )
-    # ensure our warning message appears only once
-    assert (
-        result.stdout.str().count("async def functions are not natively supported") == 1
-    )
+    result.assert_outcomes(failed=3)
 
 
 def test_pdb_can_be_rewritten(pytester: Pytester) -> None:
@@ -1348,7 +1369,7 @@ def test_no_brokenpipeerror_message(pytester: Pytester) -> None:
     popen.stderr.close()
 
 
-def test_function_return_non_none_warning(pytester: Pytester) -> None:
+def test_function_return_non_none_error(pytester: Pytester) -> None:
     pytester.makepyfile(
         """
         def test_stuff():
@@ -1356,6 +1377,7 @@ def test_function_return_non_none_warning(pytester: Pytester) -> None:
     """
     )
     res = pytester.runpytest()
+    res.assert_outcomes(failed=1)
     res.stdout.fnmatch_lines(["*Did you mean to use `assert` instead of `return`?*"])
 
 
@@ -1437,16 +1459,30 @@ def test_issue_9765(pytester: Pytester) -> None:
         }
     )
 
-    subprocess.run([sys.executable, "setup.py", "develop"], check=True)
+    subprocess.run(
+        [sys.executable, "-Im", "pip", "install", "-e", "."],
+        check=True,
+    )
     try:
         # We are using subprocess.run rather than pytester.run on purpose.
         # pytester.run is adding the current directory to PYTHONPATH which avoids
         # the bug. We also use pytest rather than python -m pytest for the same
         # PYTHONPATH reason.
         subprocess.run(
-            ["pytest", "my_package"], capture_output=True, check=True, text=True
+            ["pytest", "my_package"],
+            capture_output=True,
+            check=True,
+            encoding="utf-8",
+            text=True,
         )
     except subprocess.CalledProcessError as exc:
         raise AssertionError(
             f"pytest command failed:\n{exc.stdout=!s}\n{exc.stderr=!s}"
         ) from exc
+
+
+def test_no_terminal_plugin(pytester: Pytester) -> None:
+    """Smoke test to ensure pytest can execute without the terminal plugin (#9422)."""
+    pytester.makepyfile("def test(): assert 1 == 2")
+    result = pytester.runpytest("-pno:terminal", "-s")
+    assert result.ret == ExitCode.TESTS_FAILED
